@@ -8,6 +8,7 @@ Cache hits are passed through here with the cached_result already populated.
 import time
 
 from internal_bot.bot.services.formatter import format_structured_response
+from internal_bot.bot.services.formatter import normalize_cached_response
 from internal_bot.bot.state import GraphState
 
 
@@ -17,7 +18,7 @@ def run(state: GraphState) -> dict:
 
 	# If this is a cache hit, the cached_result is the response
 	if state.get("cache_hit") and state.get("cached_result"):
-		response = dict(state["cached_result"])
+		response = normalize_cached_response(state["cached_result"], state)
 		# Re-attach debug fields if requested
 		if state.get("debug"):
 			response["debug"] = {

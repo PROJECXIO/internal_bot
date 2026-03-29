@@ -1,6 +1,6 @@
 from frappe.tests.utils import FrappeTestCase
 
-from internal_bot.bot.services.formatter import format_structured_response
+from internal_bot.bot.services.formatter import format_structured_response, normalize_cached_response
 
 
 class TestStructuredFormatter(FrappeTestCase):
@@ -14,9 +14,18 @@ class TestStructuredFormatter(FrappeTestCase):
 			"max_rows": 100,
 		}
 
-	def test_single_numeric_value_returns_metric_card(self):
+	def test_single_numeric_value_defaults_to_plain_text(self):
 		response = format_structured_response(
 			self._base_state([{"total_sales": 125000}])
+		)
+
+		self.assertEqual(response["response_type"], "plain_text")
+		self.assertIsNone(response["visualization"])
+		self.assertEqual(response["summary"], "Total Sales: 125,000")
+
+	def test_single_numeric_value_returns_metric_card_when_requested(self):
+		response = format_structured_response(
+			self._base_state([{"total_sales": 125000}], message="show total sales as a metric card")
 		)
 
 		self.assertEqual(response["response_type"], "metric_card")
@@ -32,13 +41,27 @@ class TestStructuredFormatter(FrappeTestCase):
 		self.assertIsNone(response["visualization"])
 		self.assertEqual(response["summary"], "Test Supplier")
 
-	def test_label_numeric_rows_return_bar_chart(self):
+	def test_label_numeric_rows_default_to_table(self):
 		response = format_structured_response(
 			self._base_state(
 				[
 					{"territory": "West", "total_sales": 1200},
 					{"territory": "East", "total_sales": 950},
 				]
+			)
+		)
+
+		self.assertEqual(response["response_type"], "table")
+		self.assertIsNone(response["visualization"])
+
+	def test_label_numeric_rows_return_bar_chart_when_requested(self):
+		response = format_structured_response(
+			self._base_state(
+				[
+					{"territory": "West", "total_sales": 1200},
+					{"territory": "East", "total_sales": 950},
+				],
+				message="show sales by territory as a bar chart",
 			)
 		)
 
@@ -86,3 +109,26 @@ class TestStructuredFormatter(FrappeTestCase):
 
 		self.assertEqual(response["response_type"], "bar_chart")
 		self.assertEqual(response["visualization"]["kind"], "bar")
+
+	def test_cached_single_text_table_is_normalized_to_plain_text(self):
+		cached = {
+			"status": "success",
+			"response_type": "table",
+			"title": "Supplier with biggest grand total purchase invoice",
+			"columns": ["supplier_name"],
+			"rows": [{"supplier_name": "Test Supplier"}],
+			"summary": "Returned 1 row across 1 column.",
+			"visualization": None,
+			"meta": {"confidence": 0.95, "has_more": False, "returned_rows": 1},
+		}
+
+		response = normalize_cached_response(
+			cached,
+			self._base_state(
+				[{"supplier_name": "Test Supplier"}],
+				message="what the name of the supplier with biggest grand total purchase invoice",
+			),
+		)
+
+		self.assertEqual(response["response_type"], "plain_text")
+		self.assertEqual(response["summary"], "Test Supplier")

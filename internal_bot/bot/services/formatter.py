@@ -109,6 +109,40 @@ def format_structured_response(state: "GraphState") -> dict:
 	return response
 
 
+def normalize_cached_response(cached_result: dict, state: "GraphState") -> dict:
+	"""Upgrade cached success payloads to the current response contract."""
+	response = dict(cached_result or {})
+	if response.get("status") != "success":
+		return response
+
+	rows = _serialize_rows(response.get("rows") or [])
+	columns = response.get("columns") or (list(rows[0].keys()) if rows else [])
+	title = response.get("title") or _make_title(state.get("normalized_question") or state.get("raw_message", ""))
+	preference = _detect_visualization_preference(state.get("normalized_question") or state.get("raw_message", ""))
+	response_type, visualization, summary = _build_success_visualization(
+		rows=rows,
+		columns=columns,
+		title=title,
+		preference=preference,
+	)
+
+	response["response_type"] = response_type
+	response["visualization"] = visualization
+	response["summary"] = summary
+	response["title"] = title
+	response["columns"] = columns
+	response["rows"] = rows
+	response.setdefault(
+		"meta",
+		{
+			"confidence": _estimate_confidence(state),
+			"has_more": len(rows) >= (state.get("max_rows") or 100),
+			"returned_rows": len(rows),
+		},
+	)
+	return response
+
+
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
@@ -160,7 +194,7 @@ def _detect_visualization_preference(question: str) -> str:
 		return "card"
 	if "chart" in text or "graph" in text:
 		return "bar"
-	if "summary" in text or "single value" in text or "metric" in text:
+	if "summary" in text or "single value" in text or "metric" in text or "kpi" in text:
 		return "card"
 	return "auto"
 
@@ -174,12 +208,16 @@ def _build_success_visualization(rows: list[dict], columns: list[str], title: st
 		return "plain_text", None, plain_answer
 
 	metric_payload = _build_metric_visualization(rows, columns, title)
-	if metric_payload and preference in {"auto", "card"}:
+	if metric_payload and preference == "card":
 		return "metric_card", metric_payload, _summarize_metric(metric_payload)
 
 	chart_payload = _build_chart_visualization(rows, columns, title, preference)
 	if chart_payload:
 		return chart_payload["response_type"], chart_payload["visualization"], chart_payload["summary"]
+
+	plain_summary = _build_plain_summary(rows, columns)
+	if plain_summary:
+		return "plain_text", None, plain_summary
 
 	return "table", None, _summarize_table(rows, columns)
 
@@ -224,6 +262,9 @@ def _build_metric_visualization(rows: list[dict], columns: list[str], title: str
 
 
 def _build_chart_visualization(rows: list[dict], columns: list[str], title: str, preference: str) -> dict | None:
+	if preference not in {"bar", "pie"}:
+		return None
+
 	if len(rows) < 2 or len(rows) > 12 or len(columns) != 2:
 		return None
 
@@ -266,6 +307,28 @@ def _build_chart_visualization(rows: list[dict], columns: list[str], title: str,
 		"visualization": visualization,
 		"summary": _summarize_chart(categories, values, value_key, kind),
 	}
+
+
+def _build_plain_summary(rows: list[dict], columns: list[str]) -> str | None:
+	if len(rows) != 1 or len(columns) > 2:
+		return None
+
+	row = rows[0]
+	parts = []
+	for column in columns:
+		value = row.get(column)
+		if value in (None, ""):
+			continue
+		label = column.replace("_", " ").title()
+		if _is_numeric_value(value):
+			parts.append(f"{label}: {_format_metric_value(value)}")
+		else:
+			parts.append(str(value) if len(columns) == 1 else f"{label}: {value}")
+
+	if not parts:
+		return None
+
+	return " | ".join(parts)
 
 
 def _pick_chart_axes(rows: list[dict], columns: list[str]) -> tuple[str | None, str | None]:

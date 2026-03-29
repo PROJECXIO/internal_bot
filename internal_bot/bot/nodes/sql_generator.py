@@ -39,7 +39,12 @@ def run(state: GraphState) -> dict:
 	memory_context = "\n\n".join(memory_parts)
 
 	attempt = state.get("sql_generation_attempts") or 0
-	previous_error = state.get("sql_invalid_reason") or state.get("sql_generation_error") or None
+	previous_error = (
+		state.get("sql_execution_error")
+		or state.get("sql_invalid_reason")
+		or state.get("sql_generation_error")
+		or None
+	)
 
 	try:
 		sql = sql_service.generate_sql(

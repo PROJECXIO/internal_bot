@@ -46,6 +46,7 @@ def run(state: GraphState) -> dict:
 				role="assistant",
 				content=_response_to_text(response),
 				status=status,
+				structured_response=json.dumps(response),
 				normalized_question=state.get("normalized_question"),
 				discovered_entities=json.dumps(state.get("discovered_doctypes") or []),
 				generated_sql=state.get("generated_sql"),

@@ -131,6 +131,7 @@ class TestGraphIntegration(FrappeTestCase):
 		self.assertEqual(response["status"], "success")
 		self.assertEqual(len(response["rows"]), 1)
 		self.assertIn("name", response["columns"])
+		self.assertEqual(response["response_type"], "table")
 
 	# ── Node trace ────────────────────────────────────────────────────
 
@@ -191,3 +192,45 @@ class TestGraphIntegration(FrappeTestCase):
 		self.assertIn("node_trace", debug)
 		self.assertIn("timing", debug)
 		self.assertIn("cache_hit", debug)
+
+	def test_single_value_query_returns_metric_card_response(self):
+		intent_response = '{"intent": "query", "normalized_question": "show total sales", "reason": "", "clarification_options": []}'
+		sql_response = "SELECT SUM(grand_total) AS total_sales FROM `tabSales Invoice` LIMIT 1"
+
+		llm = _make_mock_llm([intent_response, sql_response])
+		state = _base_state("show total sales", llm_client=llm)
+
+		graph = get_graph()
+
+		with patch("internal_bot.bot.services.sql_service.execute_sql_readonly") as mock_exec:
+			mock_exec.return_value = [{"total_sales": 125000}]
+			result = graph.invoke(state)
+
+		response = result["formatted_response"]
+		self.assertEqual(response["response_type"], "metric_card")
+		self.assertEqual(response["visualization"]["kind"], "metric")
+
+	def test_sql_execution_error_retries_with_database_error_context(self):
+		intent_response = '{"intent": "query", "normalized_question": "show invoice totals", "reason": "", "clarification_options": []}'
+		bad_sql = "SELECT pi.posting_dateAS total FROM `tabSales Invoice` pi LIMIT 10"
+		fixed_sql = "SELECT pi.posting_date AS posting_date FROM `tabSales Invoice` pi LIMIT 10"
+
+		llm = _make_mock_llm([intent_response, bad_sql, fixed_sql])
+		state = _base_state("show invoice totals", llm_client=llm)
+
+		graph = get_graph()
+
+		with patch("internal_bot.bot.services.sql_service.execute_sql_readonly") as mock_exec:
+			mock_exec.side_effect = [
+				Exception('(1054, "Unknown column \'pi.posting_dateAS\' in \'SELECT\'")'),
+				[{"posting_date": "2026-03-29"}],
+			]
+			result = graph.invoke(state)
+
+		response = result["formatted_response"]
+		self.assertEqual(response["status"], "success")
+		self.assertEqual(response["rows"][0]["posting_date"], "2026-03-29")
+		self.assertGreaterEqual(result.get("sql_generation_attempts", 0), 1)
+
+		last_prompt = llm.chat_completion.call_args_list[-1].args[0][1]["content"]
+		self.assertIn("Unknown column", last_prompt)

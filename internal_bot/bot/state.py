@@ -11,7 +11,7 @@ class GraphState(TypedDict, total=False):
 	# ── Inputs (set at graph entry) ─────────────────────────────────
 	user: str               # frappe.session.user
 	raw_message: str        # original user input
-	session_name: str       # AI Chat Session name (= user email)
+	session_name: str       # AI Chat Session document name
 	debug: bool             # include debug fields in response?
 	max_rows: int           # from AI Provider Settings.max_result_rows
 
@@ -49,6 +49,10 @@ class GraphState(TypedDict, total=False):
 
 	# ── Node 7: Result Formatter ─────────────────────────────────────
 	formatted_response: dict    # final API response
+	response_type: str          # "metric_card" | "bar_chart" | "pie_chart" | "table" | "empty"
+	visualization: Optional[dict]
+	summary: str
+	visualization_preference: str  # "auto" | "card" | "bar" | "pie"
 
 	# ── Per-request injected objects (must be in schema for LangGraph to preserve) ──
 	_llm_client: Any   # LLMClient instance, injected in chat.py

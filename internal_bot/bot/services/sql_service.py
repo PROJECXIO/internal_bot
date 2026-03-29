@@ -55,6 +55,10 @@ def generate_sql(
 		"6. If the question is ambiguous, generate the most reasonable interpretation.\n"
 		"7. Use table aliases for readability.\n"
 		"8. For date-based queries, today = CURDATE().\n"
+		"9. If the user asks for a pie chart, bar chart, graph, or summary card, prefer SQL that returns "
+		"compact aggregated result sets suitable for visualization, such as label + numeric value pairs or a "
+		"single aggregate metric.\n"
+		"10. Do not output chart instructions or JSON config. Output only SQL.\n"
 	)
 
 	user_parts = []

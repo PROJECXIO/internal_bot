@@ -19,6 +19,11 @@ Graph topology:
                                               ├─ [valid]   → sql_executor
                                               ├─ [retry]   → sql_generator  (up to 3x)
                                               └─ [give_up] → result_formatter
+                                         sql_executor
+                                              ↓ (conditional)
+                                              ├─ [success] → result_formatter
+                                              ├─ [retry]   → sql_generator  (up to 3x)
+                                              └─ [give_up] → result_formatter
                                                                     ↓
                                                                analytics
                                                                     ↓
@@ -65,6 +70,15 @@ def _route_after_cache(state: GraphState) -> str:
 def _route_after_validation(state: GraphState) -> str:
 	if state.get("sql_is_valid"):
 		return "valid"
+	attempts = state.get("sql_generation_attempts") or 0
+	if attempts < _MAX_RETRIES:
+		return "retry"
+	return "give_up"
+
+
+def _route_after_execution(state: GraphState) -> str:
+	if not state.get("sql_execution_error"):
+		return "success"
 	attempts = state.get("sql_generation_attempts") or 0
 	if attempts < _MAX_RETRIES:
 		return "retry"
@@ -131,8 +145,16 @@ def _build_graph():
 		},
 	)
 
-	# sql_executor → formatter
-	g.add_edge("sql_executor", "result_formatter")
+	# sql_executor → branch on execution success / retry / give_up
+	g.add_conditional_edges(
+		"sql_executor",
+		_route_after_execution,
+		{
+			"success": "result_formatter",
+			"retry": "sql_generator",
+			"give_up": "result_formatter",
+		},
+	)
 
 	# All paths converge at result_formatter → analytics → END
 	g.add_edge("result_formatter", "analytics")

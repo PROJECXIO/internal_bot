@@ -20,6 +20,7 @@ class AIChatMessage(Document):
 	role: DF.Literal["user", "assistant", "system"]
 	session: DF.Link
 	status: DF.Literal["success", "clarification_needed", "blocked", "error"]
+	structured_response: DF.LongText | None
 	user: DF.Link
 	validated_sql: DF.LongText | None
 	# end: auto-generated types

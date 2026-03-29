@@ -29,10 +29,13 @@ def run(state: GraphState) -> dict:
 		})
 	except Exception as exc:
 		frappe.log_error(message=str(exc), title="SQLExecutor error")
+		attempts = (state.get("sql_generation_attempts") or 0) + 1
 		return _update(state, node_name, t0, {
 			"sql_result_rows": [],
 			"sql_execution_error": str(exc),
 			"result_row_count": 0,
+			"sql_generation_attempts": attempts,
+			"retries": attempts,
 		})
 
 

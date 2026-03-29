@@ -1,7 +1,7 @@
 {
  "actions": [],
  "allow_rename": 0,
- "autoname": "field:user",
+ "autoname": "format:AICS-{YYYY}-{MM}-{DD}-{#####}",
  "creation": "2024-01-01 00:00:00.000000",
  "doctype": "DocType",
  "engine": "InnoDB",
@@ -20,8 +20,7 @@
    "in_list_view": 1,
    "label": "User",
    "options": "User",
-   "reqd": 1,
-   "unique": 1
+   "reqd": 1
   },
   {
    "default": "0",

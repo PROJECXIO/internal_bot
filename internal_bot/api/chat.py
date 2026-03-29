@@ -6,7 +6,7 @@ The single public API endpoint for the Internal Bot.
 Request body (JSON):
   {
     "message":    "show sales today",
-    "session_id": "optional – ignored in Phase 1 (one session per user)",
+    "session_id": "optional – AI Chat Session name",
     "debug":      true
   }
 
@@ -30,10 +30,9 @@ load_dotenv(_ENV_FILE, override=False)
 
 
 @frappe.whitelist(methods=["POST"])
-def ask(message: str, session_id: str = None, debug: bool = False):  # noqa: ARG001
+def ask(message: str, session_id: str = None, debug: bool = False):
 	"""
 	Main chat endpoint. Requires an authenticated Frappe session.
-	session_id is accepted but ignored in Phase 1 — one session per user.
 	"""
 	user = frappe.session.user
 	if not user or user == "Guest":
@@ -46,8 +45,7 @@ def ask(message: str, session_id: str = None, debug: bool = False):  # noqa: ARG
 			"meta": {"confidence": 0.0},
 		}
 
-	# Get or create the single session for this user
-	session_name = _get_or_create_session(user)
+	session_name = _get_or_create_session(user, session_id=session_id)
 
 	# Load provider settings (raises if not configured)
 	try:
@@ -95,17 +93,20 @@ def ask(message: str, session_id: str = None, debug: bool = False):  # noqa: ARG
 	try:
 		graph = get_graph()
 		final_state = graph.invoke(initial_state)
-		return final_state.get("formatted_response") or {
+		response = final_state.get("formatted_response") or {
 			"status": "error",
 			"reason": "No response generated.",
 			"meta": {"confidence": 0.0},
 		}
+		response["session_id"] = session_name
+		return response
 	except Exception as exc:
 		frappe.log_error(message=frappe.get_traceback(), title="Internal Bot: graph invoke failed")
 		return {
 			"status": "error",
 			"reason": "An internal error occurred. Please try again.",
 			"meta": {"confidence": 0.0, "error_detail": str(exc)},
+			"session_id": session_name,
 		}
 
 
@@ -114,18 +115,13 @@ def ask(message: str, session_id: str = None, debug: bool = False):  # noqa: ARG
 # ──────────────────────────────────────────────────────────────────
 
 
-def _get_or_create_session(user: str) -> str:
-	"""
-	Return the existing AI Chat Session name for the user, or create one.
-	Session name == user email (enforces one-session-per-user).
-	"""
-	if frappe.db.exists("AI Chat Session", user):
-		return user
-
+@frappe.whitelist(methods=["POST"])
+def create_session() -> dict:
+	"""Create and return a new chat session for the current user."""
+	user = _require_authenticated_user()
 	doc = frappe.get_doc(
 		{
 			"doctype": "AI Chat Session",
-			"name": user,  # explicit name — matches autoname "field:user"
 			"user": user,
 			"is_active": 1,
 			"total_messages": 0,
@@ -133,4 +129,118 @@ def _get_or_create_session(user: str) -> str:
 	)
 	doc.insert(ignore_permissions=True)
 	frappe.db.commit()
+	return {"session_id": doc.name, "session": _serialize_session(doc.name)}
+
+
+@frappe.whitelist()
+def list_sessions() -> dict:
+	"""List chat sessions for the current user, newest first."""
+	user = _require_authenticated_user()
+	sessions = frappe.get_all(
+		"AI Chat Session",
+		filters={"user": user},
+		fields=["name", "creation", "modified", "total_messages", "is_active"],
+		order_by="modified desc",
+	)
+	return {
+		"sessions": [_serialize_session(session["name"], session_doc=session) for session in sessions],
+		"active_session_id": sessions[0]["name"] if sessions else None,
+	}
+
+
+@frappe.whitelist()
+def get_session_history(session_id: str = None) -> dict:
+	"""Return the active session id and full renderable message history."""
+	user = _require_authenticated_user()
+	session_name = _get_or_create_session(user, session_id=session_id)
+	messages = frappe.get_all(
+		"AI Chat Message",
+		filters={"session": session_name, "user": user},
+		fields=["role", "status", "content", "structured_response", "creation"],
+		order_by="creation asc",
+	)
+	return {
+		"session_id": session_name,
+		"messages": [_deserialize_message(message) for message in messages],
+	}
+
+
+def _get_or_create_session(user: str, session_id: str | None = None) -> str:
+	"""
+	Return the requested AI Chat Session for the user, or create one.
+	"""
+	if session_id:
+		if not frappe.db.exists("AI Chat Session", {"name": session_id, "user": user}):
+			frappe.throw(_("Chat session not found."), frappe.DoesNotExistError)
+		return session_id
+
+	existing = frappe.get_all(
+		"AI Chat Session",
+		filters={"user": user},
+		fields=["name"],
+		order_by="modified desc",
+		limit=1,
+	)
+	if existing:
+		return existing[0]["name"]
+
+	doc = frappe.get_doc(
+		{
+			"doctype": "AI Chat Session",
+			"user": user,
+			"is_active": 1,
+			"total_messages": 0,
+		}
+	)
+	doc.insert(ignore_permissions=True)
+	frappe.db.commit()
+	return doc.name
+
+
+def _require_authenticated_user() -> str:
+	user = frappe.session.user
+	if not user or user == "Guest":
+		frappe.throw(_("You must be logged in to use the chat."), frappe.AuthenticationError)
 	return user
+
+
+def _serialize_session(session_name: str, session_doc: dict | None = None) -> dict:
+	session = session_doc or frappe.db.get_value(
+		"AI Chat Session",
+		session_name,
+		["name", "creation", "modified", "total_messages", "is_active"],
+		as_dict=True,
+	)
+	preview_rows = frappe.get_all(
+		"AI Chat Message",
+		{"session": session_name},
+		["content", "role"],
+		order_by="creation desc",
+		limit=1,
+	)
+	preview = preview_rows[0] if preview_rows else None
+	return {
+		"session_id": session["name"],
+		"creation": session.get("creation"),
+		"modified": session.get("modified"),
+		"total_messages": session.get("total_messages") or 0,
+		"is_active": session.get("is_active") or 0,
+		"preview": (preview.get("content") if preview else "") or "",
+		"preview_role": (preview.get("role") if preview else "") or "",
+	}
+
+
+def _deserialize_message(message: dict) -> dict:
+	if message.get("role") == "assistant" and message.get("structured_response"):
+		try:
+			payload = frappe.parse_json(message["structured_response"])
+			payload["role"] = "assistant"
+			return payload
+		except Exception:
+			pass
+
+	return {
+		"role": message.get("role"),
+		"status": message.get("status"),
+		"content": message.get("content") or "",
+	}

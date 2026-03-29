@@ -10,9 +10,11 @@
     "copy-html-entry": "cp ../internal_bot/public/ai_chat/index.html ../internal_bot/www/ai_chat.html"
   },
   "dependencies": {
+    "apexcharts": "^5.10.4",
     "marked": "^15.0.12",
     "socket.io-client": "^4.5.1",
     "vue": "^3.5.30",
+    "vue3-apexcharts": "^1.8.0",
     "vue-router": "^4"
   },
   "devDependencies": {

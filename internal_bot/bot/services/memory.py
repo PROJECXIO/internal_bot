@@ -12,13 +12,14 @@ def load_chat_memory(session_name: str, window_size: int) -> dict:
 	"""Return last N messages and the current rolling summary for the session."""
 	session = frappe.get_doc("AI Chat Session", session_name)
 
-	messages = frappe.get_all(
+	recent_messages = frappe.get_all(
 		"AI Chat Message",
 		filters={"session": session_name, "role": ["in", ["user", "assistant"]]},
 		fields=["role", "content", "creation"],
-		order_by="creation asc",
+		order_by="creation desc",
 		limit=window_size,
 	)
+	messages = list(reversed(recent_messages))
 
 	return {
 		"messages": [{"role": m.role, "content": m.content} for m in messages],
@@ -46,6 +47,7 @@ def save_message(
 			"content": content,
 			"status": status,
 			"normalized_question": debug_fields.get("normalized_question"),
+			"structured_response": debug_fields.get("structured_response"),
 			"discovered_entities": debug_fields.get("discovered_entities"),
 			"generated_sql": debug_fields.get("generated_sql"),
 			"validated_sql": debug_fields.get("validated_sql"),

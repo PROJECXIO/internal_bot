@@ -36,7 +36,18 @@ def run(state: GraphState) -> dict:
 	else:
 		formatted = format_structured_response(state)
 
-	return _update(state, node_name, t0, {"formatted_response": formatted})
+	return _update(
+		state,
+		node_name,
+		t0,
+		{
+			"formatted_response": formatted,
+			"response_type": formatted.get("response_type"),
+			"visualization": formatted.get("visualization"),
+			"summary": formatted.get("summary"),
+			"visualization_preference": formatted.get("debug", {}).get("visualization_preference"),
+		},
+	)
 
 
 def _update(state: GraphState, node_name: str, t0: float, updates: dict) -> dict:

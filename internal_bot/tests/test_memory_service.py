@@ -11,7 +11,7 @@ from internal_bot.bot.services.memory import load_chat_memory, save_message
 
 
 _TEST_USER = "test-memory@internal-bot.test"
-_TEST_SESSION = _TEST_USER  # session name == user email
+_TEST_SESSION = "AICS-TEST-MEMORY"
 
 
 class TestMemoryService(FrappeTestCase):

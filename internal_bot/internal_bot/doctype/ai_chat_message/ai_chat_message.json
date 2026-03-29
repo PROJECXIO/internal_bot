@@ -10,6 +10,7 @@
   "role",
   "status",
   "content",
+  "structured_response",
   "section_break_debug",
   "normalized_question",
   "discovered_entities",
@@ -63,6 +64,11 @@
    "fieldtype": "Long Text",
    "label": "Content",
    "reqd": 1
+  },
+  {
+   "fieldname": "structured_response",
+   "fieldtype": "Long Text",
+   "label": "Structured Response"
   },
   {
    "fieldname": "section_break_debug",

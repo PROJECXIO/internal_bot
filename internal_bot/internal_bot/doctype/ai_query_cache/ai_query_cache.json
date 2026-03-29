@@ -1,0 +1,89 @@
+{
+ "actions": [],
+ "autoname": "format:AIQC-{YYYY}-{######}",
+ "creation": "2024-01-01 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "query_hash",
+  "normalized_question",
+  "generated_sql",
+  "result_json",
+  "hit_count",
+  "expires_at",
+  "created_by_user"
+ ],
+ "fields": [
+  {
+   "fieldname": "query_hash",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Query Hash",
+   "reqd": 1,
+   "unique": 1,
+   "description": "SHA256 of normalized question"
+  },
+  {
+   "fieldname": "normalized_question",
+   "fieldtype": "Small Text",
+   "in_list_view": 1,
+   "label": "Normalized Question",
+   "reqd": 1
+  },
+  {
+   "fieldname": "generated_sql",
+   "fieldtype": "Long Text",
+   "label": "Generated SQL",
+   "reqd": 1
+  },
+  {
+   "fieldname": "result_json",
+   "fieldtype": "Long Text",
+   "label": "Result JSON",
+   "reqd": 1,
+   "description": "Full serialized response dict"
+  },
+  {
+   "default": "0",
+   "fieldname": "hit_count",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Hit Count"
+  },
+  {
+   "fieldname": "expires_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Expires At",
+   "reqd": 1
+  },
+  {
+   "fieldname": "created_by_user",
+   "fieldtype": "Data",
+   "label": "Created By User"
+  }
+ ],
+ "links": [],
+ "modified": "2024-01-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Internal Bot",
+ "name": "AI Query Cache",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

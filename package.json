@@ -1,0 +1,15 @@
+{
+  "name": "internal_bot",
+  "version": "1.0.0",
+  "description": "a bot that support langchain integration",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "postinstall": "cd ai_chat && yarn install",
+    "dev": "cd ai_chat && yarn dev",
+    "build": "cd ai_chat && yarn build"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

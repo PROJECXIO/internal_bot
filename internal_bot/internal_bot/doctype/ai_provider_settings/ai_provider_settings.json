@@ -1,0 +1,166 @@
+{
+ "actions": [],
+ "creation": "2024-01-01 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "provider",
+  "model",
+  "api_key",
+  "api_base",
+  "api_version",
+  "section_break_limits",
+  "max_tokens",
+  "temperature",
+  "request_timeout",
+  "section_break_memory",
+  "memory_window",
+  "summary_threshold",
+  "section_break_cache",
+  "enable_cache",
+  "cache_ttl_hours",
+  "section_break_security",
+  "blocked_doctypes",
+  "max_result_rows"
+ ],
+ "fields": [
+  {
+   "fieldname": "provider",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Provider",
+   "options": "OpenAI\nAzure OpenAI\nAnthropic\nOpenRouter",
+   "reqd": 1
+  },
+  {
+   "fieldname": "model",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Model",
+   "reqd": 1
+  },
+  {
+   "fieldname": "api_key",
+   "fieldtype": "Password",
+   "label": "API Key",
+   "reqd": 1
+  },
+  {
+   "fieldname": "api_base",
+   "fieldtype": "Data",
+   "label": "API Base URL"
+  },
+  {
+   "fieldname": "api_version",
+   "fieldtype": "Data",
+   "label": "API Version",
+   "description": "e.g. 2024-02-01 for Azure OpenAI"
+  },
+  {
+   "fieldname": "section_break_limits",
+   "fieldtype": "Section Break",
+   "label": "Generation Limits"
+  },
+  {
+   "default": "2000",
+   "fieldname": "max_tokens",
+   "fieldtype": "Int",
+   "label": "Max Tokens",
+   "reqd": 1
+  },
+  {
+   "default": "0.0",
+   "fieldname": "temperature",
+   "fieldtype": "Float",
+   "label": "Temperature",
+   "reqd": 1
+  },
+  {
+   "default": "30",
+   "fieldname": "request_timeout",
+   "fieldtype": "Int",
+   "label": "Request Timeout (s)",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_break_memory",
+   "fieldtype": "Section Break",
+   "label": "Memory Settings"
+  },
+  {
+   "default": "10",
+   "fieldname": "memory_window",
+   "fieldtype": "Int",
+   "label": "Memory Window (messages)",
+   "description": "Number of recent messages to include in each request",
+   "reqd": 1
+  },
+  {
+   "default": "20",
+   "fieldname": "summary_threshold",
+   "fieldtype": "Int",
+   "label": "Summary Threshold",
+   "description": "Summarize conversation after this many total messages",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_break_cache",
+   "fieldtype": "Section Break",
+   "label": "Cache Settings"
+  },
+  {
+   "default": "1",
+   "fieldname": "enable_cache",
+   "fieldtype": "Check",
+   "label": "Enable Query Cache"
+  },
+  {
+   "default": "24",
+   "fieldname": "cache_ttl_hours",
+   "fieldtype": "Int",
+   "label": "Cache TTL (hours)"
+  },
+  {
+   "fieldname": "section_break_security",
+   "fieldtype": "Section Break",
+   "label": "Security"
+  },
+  {
+   "fieldname": "blocked_doctypes",
+   "fieldtype": "Small Text",
+   "label": "Blocked DocTypes",
+   "description": "One DocType name per line. Queries touching these will be blocked."
+  },
+  {
+   "default": "100",
+   "fieldname": "max_result_rows",
+   "fieldtype": "Int",
+   "label": "Max Result Rows",
+   "reqd": 1
+  }
+ ],
+ "issingle": 1,
+ "links": [],
+ "modified": "2024-01-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Internal Bot",
+ "name": "AI Provider Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

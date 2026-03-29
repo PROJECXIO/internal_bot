@@ -1,0 +1,173 @@
+{
+ "actions": [],
+ "autoname": "format:AIMT-{YYYY}-{MM}-{DD}-{######}",
+ "creation": "2024-01-01 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "session",
+  "user",
+  "role",
+  "status",
+  "content",
+  "section_break_debug",
+  "normalized_question",
+  "discovered_entities",
+  "generated_sql",
+  "validated_sql",
+  "section_break_perf",
+  "cache_hit",
+  "retries",
+  "response_time_ms",
+  "llm_provider",
+  "llm_model",
+  "node_trace",
+  "section_break_error",
+  "error_detail"
+ ],
+ "fields": [
+  {
+   "fieldname": "session",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Session",
+   "options": "AI Chat Session",
+   "reqd": 1
+  },
+  {
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "User",
+   "options": "User",
+   "reqd": 1
+  },
+  {
+   "fieldname": "role",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Role",
+   "options": "user\nassistant\nsystem",
+   "reqd": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "success\nclarification_needed\nblocked\nerror",
+   "reqd": 1
+  },
+  {
+   "fieldname": "content",
+   "fieldtype": "Long Text",
+   "label": "Content",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_break_debug",
+   "fieldtype": "Section Break",
+   "label": "Debug Info",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "normalized_question",
+   "fieldtype": "Small Text",
+   "label": "Normalized Question"
+  },
+  {
+   "fieldname": "discovered_entities",
+   "fieldtype": "Small Text",
+   "label": "Discovered Entities",
+   "description": "JSON array of discovered DocType names"
+  },
+  {
+   "fieldname": "generated_sql",
+   "fieldtype": "Long Text",
+   "label": "Generated SQL"
+  },
+  {
+   "fieldname": "validated_sql",
+   "fieldtype": "Long Text",
+   "label": "Validated SQL"
+  },
+  {
+   "fieldname": "section_break_perf",
+   "fieldtype": "Section Break",
+   "label": "Performance",
+   "collapsible": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "cache_hit",
+   "fieldtype": "Check",
+   "label": "Cache Hit"
+  },
+  {
+   "default": "0",
+   "fieldname": "retries",
+   "fieldtype": "Int",
+   "label": "SQL Gen Retries"
+  },
+  {
+   "fieldname": "response_time_ms",
+   "fieldtype": "Int",
+   "label": "Response Time (ms)"
+  },
+  {
+   "fieldname": "llm_provider",
+   "fieldtype": "Data",
+   "label": "LLM Provider"
+  },
+  {
+   "fieldname": "llm_model",
+   "fieldtype": "Data",
+   "label": "LLM Model"
+  },
+  {
+   "fieldname": "node_trace",
+   "fieldtype": "Long Text",
+   "label": "Node Trace",
+   "description": "JSON array of visited node names in order"
+  },
+  {
+   "fieldname": "section_break_error",
+   "fieldtype": "Section Break",
+   "label": "Error Info",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "error_detail",
+   "fieldtype": "Small Text",
+   "label": "Error Detail"
+  }
+ ],
+ "links": [],
+ "modified": "2024-01-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Internal Bot",
+ "name": "AI Chat Message",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "if_owner": 1,
+   "read": 1,
+   "role": "All"
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "ASC",
+ "states": [],
+ "track_changes": 0
+}

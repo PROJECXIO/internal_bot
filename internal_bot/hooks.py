@@ -83,7 +83,7 @@ app_license = "mit"
 # ------------
 
 # before_install = "internal_bot.install.before_install"
-# after_install = "internal_bot.install.after_install"
+after_install = "internal_bot.patches.v0_0_1.create_default_settings.execute"
 
 # Uninstallation
 # ------------
@@ -148,23 +148,11 @@ app_license = "mit"
 # Scheduled Tasks
 # ---------------
 
-# scheduler_events = {
-# 	"all": [
-# 		"internal_bot.tasks.all"
-# 	],
-# 	"daily": [
-# 		"internal_bot.tasks.daily"
-# 	],
-# 	"hourly": [
-# 		"internal_bot.tasks.hourly"
-# 	],
-# 	"weekly": [
-# 		"internal_bot.tasks.weekly"
-# 	],
-# 	"monthly": [
-# 		"internal_bot.tasks.monthly"
-# 	],
-# }
+scheduler_events = {
+	"daily": [
+		"internal_bot.bot.services.cache_service.purge_expired_cache"
+	],
+}
 
 # Testing
 # -------
@@ -247,3 +235,5 @@ app_license = "mit"
 # List of apps whose translatable strings should be excluded from this app's translations.
 # ignore_translatable_strings_from = []
 
+
+website_route_rules = [{'from_route': '/ai_chat/<path:app_path>', 'to_route': 'ai_chat'},]

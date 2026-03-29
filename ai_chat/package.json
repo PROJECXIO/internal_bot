@@ -1,0 +1,25 @@
+{
+  "name": "ai_chat",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build --base=/assets/internal_bot/ai_chat/ && yarn copy-html-entry",
+    "preview": "vite preview",
+    "copy-html-entry": "cp ../internal_bot/public/ai_chat/index.html ../internal_bot/www/ai_chat.html"
+  },
+  "dependencies": {
+    "marked": "^15.0.12",
+    "socket.io-client": "^4.5.1",
+    "vue": "^3.5.30",
+    "vue-router": "^4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.5",
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.5.3",
+    "tailwindcss": "^3.4.17",
+    "vite": "^8.0.1"
+  }
+}

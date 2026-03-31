@@ -60,7 +60,7 @@
  "modified_by": "Administrator",
  "module": "Internal Bot",
  "name": "AI Chat Session",
- "naming_rule": "By fieldname",
+ "naming_rule": "Expression",
  "owner": "Administrator",
  "permissions": [
   {

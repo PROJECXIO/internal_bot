@@ -15,6 +15,7 @@ import time
 import frappe
 
 from internal_bot.bot.state import GraphState
+from internal_bot.bot import progress
 
 
 _SENSITIVE_KEYWORDS = [
@@ -49,6 +50,8 @@ Respond in valid JSON only (no Markdown, no extra text):
 def run(state: GraphState) -> dict:
 	t0 = time.monotonic()
 	node_name = "intent_parser"
+	if state.get("_emit_progress"):
+		progress.emit(state, node_name, "Understanding your request")
 
 	raw = (state.get("raw_message") or "").strip()
 	llm_client = state.get("_llm_client")  # injected by graph entry

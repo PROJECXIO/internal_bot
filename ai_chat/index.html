@@ -10,7 +10,12 @@
     <div id="app"></div>
 		<script>
 			window.csrf_token = '{{ frappe.session.csrf_token }}';
-			// TODO: load boot data here (context file is created in `www` directory)
+			// socketio_port is injected by Frappe (Jinja) in production.
+			// parseInt(...) || 9000 is a safe no-op fallback for Vite dev server
+			// where this Jinja template is not processed.
+			window.socketio_port = parseInt("{{ boot.socketio_port or 9000 }}", 10) || 9000;
+			// Frappe socket.io server uses per-site namespaces (/<sitename>).
+			window.site_name = '{{ frappe.local.site }}';
 		</script>
     <script type="module" src="/src/main.js"></script>
   </body>

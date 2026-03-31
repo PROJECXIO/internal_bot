@@ -5,8 +5,34 @@ import "./style.css";
 import router from './router';
 import resourceManager from "../../../doppio/libs/resourceManager";
 import call from "../../../doppio/libs/controllers/call";
-import socket from "../../../doppio/libs/controllers/socket";
+import { io } from "socket.io-client";
 import Auth from "../../../doppio/libs/controllers/auth";
+
+// doppio's socket.js hardcodes port 9000 and lacks proper namespace + credentials.
+// Frappe's socket.io server uses per-site namespaces (/<sitename>) and requires
+// withCredentials so the session cookie (sid) is sent for authentication.
+const _socketPort = (typeof window.socketio_port === "number" && window.socketio_port > 0)
+	? window.socketio_port
+	: 9000;
+
+function getValidSiteName(rawSiteName) {
+	if (typeof rawSiteName !== "string") {
+		return "";
+	}
+
+	const value = rawSiteName.trim();
+	if (!value || value.includes("{{") || value.includes("}}")) {
+		return "";
+	}
+
+	return value;
+}
+
+const _siteName = getValidSiteName(window.site_name) || window.location.hostname;
+const _socketProtocol = window.location.protocol === "https:" ? "https" : "http";
+const socket = io(`${_socketProtocol}://${window.location.hostname}:${_socketPort}/${_siteName}`, {
+	withCredentials: true,
+});
 
 const app = createApp(App);
 const auth = reactive(new Auth());

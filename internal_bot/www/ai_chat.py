@@ -26,5 +26,6 @@ def get_boot():
 			"site_name": frappe.local.site,
 			"read_only_mode": frappe.flags.read_only,
 			"system_timezone": get_system_timezone(),
+			"socketio_port": frappe.conf.get("socketio_port") or 9000,
 		}
 	)

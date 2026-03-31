@@ -62,13 +62,13 @@ def save_message(
 	)
 	msg.insert(ignore_permissions=True)
 
-	# Increment total_messages on the session using db_set to avoid full save overhead
+	# Increment total_messages on the session using db_set to avoid full save overhead.
+	# update_modified=True so the session bubbles to the top of the sidebar list.
 	frappe.db.set_value(
 		"AI Chat Session",
 		session_name,
 		"total_messages",
 		(frappe.db.get_value("AI Chat Session", session_name, "total_messages") or 0) + 1,
-		update_modified=False,
 	)
 
 	return msg.name

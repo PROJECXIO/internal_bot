@@ -7,17 +7,22 @@ can skip SQL generation and jump directly to the result formatter.
 """
 import time
 
+import frappe
+
 from internal_bot.bot.services import cache_service
 from internal_bot.bot.state import GraphState
+from internal_bot.bot import progress
 
 
 def run(state: GraphState) -> dict:
 	t0 = time.monotonic()
 	node_name = "cache_check"
+	if state.get("_emit_progress"):
+		progress.emit(state, node_name, "Checking cached results")
 
 	settings = state.get("_settings")
 	enable_cache = settings.enable_cache if settings else True
-
+	
 	if not enable_cache:
 		return _update(state, node_name, t0, {"cache_hit": False, "cached_result": None})
 
@@ -25,7 +30,8 @@ def run(state: GraphState) -> dict:
 	if not normalized:
 		return _update(state, node_name, t0, {"cache_hit": False, "cached_result": None})
 
-	query_hash = cache_service.make_query_hash(normalized)
+	user = state.get("user") or frappe.session.user
+	query_hash = cache_service.make_query_hash(normalized, user=user)
 	cached = cache_service.lookup_query_cache(query_hash)
 
 	if cached:

@@ -43,6 +43,13 @@
 
     <div class="flex min-w-0 flex-1 flex-col bg-white">
       <div class="flex items-center gap-3 px-5 py-3.5 border-b border-brand-light shrink-0 bg-white">
+        <div class="flex items-center gap-2">
+          <!-- Live status dot: pulses while a query is in flight -->
+          <span
+            class="inline-block w-2 h-2 rounded-full shrink-0"
+            :class="loading ? 'bg-brand animate-pulse' : 'bg-brand'"
+          />
+        </div>
         <div>
           <p class="text-sm font-semibold text-slate-900">AI Chat</p>
           <p class="text-xs text-slate-500">
@@ -51,10 +58,14 @@
         </div>
       </div>
 
+      <!-- Socket disconnect banner -->
+      <ConnectionBanner :show="!socketConnected" />
+
       <MessageList
         ref="messageListRef"
         :messages="messages"
         :loading="loading || sessionLoading"
+        :progress-steps="progressSteps"
         class="flex-1 min-h-0"
         @option="sendText"
       />
@@ -74,11 +85,12 @@
 import MessageList from "../components/MessageList.vue";
 import MessageInput from "../components/MessageInput.vue";
 import RevenyuLogo from "../components/RevenyuLogo.vue";
+import ConnectionBanner from "../components/ConnectionBanner.vue";
 
 export default {
-  components: { MessageList, MessageInput, RevenyuLogo },
+  components: { MessageList, MessageInput, RevenyuLogo, ConnectionBanner },
 
-  inject: ["$auth", "$call"],
+  inject: ["$auth", "$call", "$socket"],
 
   data() {
     return {
@@ -88,11 +100,24 @@ export default {
       sessionLoading: false,
       currentSessionId: "",
       sessions: [],
+      // Progress state
+      progressSteps: [],
+      socketConnected: true,
+      // Track pending async job so we only act on events for the current request
+      _pendingJobId: null,
+      // Polling fallback timer (in case socket events don't arrive)
+      _pollTimer: null,
     };
   },
 
   async mounted() {
     await this.initializeSession();
+    this.setupSocket();
+  },
+
+  beforeUnmount() {
+    this.teardownSocket();
+    this._stopPolling();
   },
 
   computed: {
@@ -115,6 +140,122 @@ export default {
   },
 
   methods: {
+    // ── Socket setup ──────────────────────────────────────────────
+
+    setupSocket() {
+      this.$socket.on("bot_progress", (data) => {
+        // Ignore events not for the current job or session
+        if (data.session_id && data.session_id !== this.currentSessionId) return;
+        if (data.job_id && this._pendingJobId && data.job_id !== this._pendingJobId) return;
+
+        if (data.is_complete) {
+          this._handleProgressComplete(data.response);
+          return;
+        }
+
+        if (data.is_error) {
+          this._handleProgressError();
+          return;
+        }
+
+        // Mark the previous active step as done, push the new one
+        const prev = [...this.progressSteps].reverse().find((s) => s.status === "active");
+        if (prev) prev.status = "done";
+        this.progressSteps.push({
+          node: data.node,
+          label: data.label,
+          status: "active",
+          attempt: data.attempt || 0,
+        });
+
+        this.$nextTick(() => this.$refs.messageListRef?.scrollToBottom());
+      });
+
+      this.$socket.on("connect", () => {
+        this.socketConnected = true;
+      });
+      this.$socket.on("disconnect", () => {
+        this.socketConnected = false;
+      });
+    },
+
+    teardownSocket() {
+      this.$socket.off("bot_progress");
+      this.$socket.off("connect");
+      this.$socket.off("disconnect");
+    },
+
+    _stopPolling() {
+      if (this._pollTimer) {
+        clearInterval(this._pollTimer);
+        this._pollTimer = null;
+      }
+    },
+
+    _startPolling(jobId) {
+      this._stopPolling();
+      // Poll ask_status every 2s as a fallback when socket events don't arrive
+      this._pollTimer = setInterval(async () => {
+        if (!this._pendingJobId || this._pendingJobId !== jobId) {
+          this._stopPolling();
+          return;
+        }
+        try {
+          const result = await this.$call("internal_bot.api.chat.ask_status", { job_id: jobId });
+          if (result.status === "complete" && result.response) {
+            this._stopPolling();
+            this._handleProgressComplete(result.response);
+          } else if (result.status === "error") {
+            this._stopPolling();
+            this._handleProgressError();
+          }
+          // status === "running" → keep polling
+        } catch {
+          // Polling failure is non-fatal — keep trying
+        }
+      }, 2000);
+    },
+
+    _handleProgressComplete(response) {
+      // Guard against double-resolution (socket + poll both firing)
+      if (!this._pendingJobId) return;
+      this._stopPolling();
+      // Mark all remaining active steps as done
+      this.progressSteps.forEach((s) => { s.status = "done"; });
+
+      // Brief pause so the user sees the last step complete, then render result
+      setTimeout(() => {
+        this.progressSteps = [];
+        this.loading = false;
+        this._pendingJobId = null;
+
+        if (response) {
+          this.currentSessionId = response.session_id || this.currentSessionId;
+          window.localStorage.setItem("internal-bot-session-id", this.currentSessionId);
+          this.messages.push(this.mapAssistantMessage(response));
+          this.refreshSessions();
+        }
+
+        this.$nextTick(() => this.$refs.messageListRef?.scrollToBottom());
+      }, 600);
+    },
+
+    _handleProgressError() {
+      if (!this._pendingJobId) return;
+      this._stopPolling();
+      this.progressSteps = [];
+      this.loading = false;
+      this._pendingJobId = null;
+      this.messages.push({
+        role: "assistant",
+        status: "error",
+        reason: "Something went wrong. Please try again.",
+      });
+      this.$nextTick(() => this.$refs.messageListRef?.scrollToBottom());
+    },
+
+    // ── Session management ────────────────────────────────────────
+
     async initializeSession() {
       this.sessionLoading = true;
       try {
@@ -224,27 +365,42 @@ export default {
       this.inputText = "";
       this.messages.push({ role: "user", content: text });
       this.loading = true;
+      this.progressSteps = [];
       this.$nextTick(() => this.$refs.messageListRef?.scrollToBottom());
 
       try {
-        const res = await this.$call("internal_bot.api.chat.ask", {
+        // Use the async endpoint: returns immediately with job_id
+        const queued = await this.$call("internal_bot.api.chat.ask_async", {
           message: text,
           session_id: this.currentSessionId || null,
           debug: false,
         });
 
-        this.currentSessionId = res.session_id || this.currentSessionId;
-        window.localStorage.setItem("internal-bot-session-id", this.currentSessionId);
-        this.messages.push(this.mapAssistantMessage(res));
-        await this.refreshSessions();
+        // Update session_id immediately so socket events are matched correctly
+        if (queued.session_id) {
+          this.currentSessionId = queued.session_id;
+          window.localStorage.setItem("internal-bot-session-id", this.currentSessionId);
+        }
+
+        // Track the pending job for event filtering
+        this._pendingJobId = queued.job_id || null;
+
+        // Start polling fallback: delivers the answer even if socket events
+        // don't arrive (e.g. wrong port, proxy blocking WebSocket upgrades).
+        // The poll is cancelled as soon as a socket event or poll response resolves.
+        if (this._pendingJobId) {
+          this._startPolling(this._pendingJobId);
+        }
+
       } catch (err) {
+        this.progressSteps = [];
+        this.loading = false;
+        this._pendingJobId = null;
         this.messages.push({
           role: "assistant",
           status: "error",
           reason: err?.messages?.[0] || "Something went wrong. Please try again.",
         });
-      } finally {
-        this.loading = false;
         this.$nextTick(() => this.$refs.messageListRef?.scrollToBottom());
       }
     },

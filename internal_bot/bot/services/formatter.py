@@ -50,11 +50,14 @@ def format_structured_response(state: "GraphState") -> dict:
 			"meta": {"confidence": 1.0},
 		}
 
-	# ── SQL Error ───────────────────────────────────────────────────
-	elif state.get("sql_execution_error") or (
-		not state.get("sql_is_valid") and state.get("sql_generation_attempts", 0) >= 3
+	# ── Query Error ─────────────────────────────────────────────────
+	elif state.get("query_execution_error") or (
+		not state.get("query_is_valid") and state.get("query_generation_attempts", 0) >= 3
 	):
-		error_msg = state.get("sql_execution_error") or state.get("sql_invalid_reason", "Unknown error")
+		error_msg = (
+			state.get("query_execution_error")
+			or state.get("query_invalid_reason", "Unknown error")
+		)
 		response = {
 			"status": "error",
 			"reason": "Could not generate a valid query. Please rephrase your question.",
@@ -63,7 +66,7 @@ def format_structured_response(state: "GraphState") -> dict:
 
 	# ── Success ──────────────────────────────────────────────────────
 	else:
-		rows = _serialize_rows(state.get("sql_result_rows") or [])
+		rows = _serialize_rows(state.get("query_result_rows") or [])
 		columns = list(rows[0].keys()) if rows else []
 		title = _make_title(state.get("normalized_question") or state.get("raw_message", ""))
 		preference = _detect_visualization_preference(state.get("normalized_question") or state.get("raw_message", ""))
@@ -94,9 +97,9 @@ def format_structured_response(state: "GraphState") -> dict:
 		response["debug"] = {
 			"normalized_question": state.get("normalized_question"),
 			"discovered_entities": state.get("discovered_doctypes", []),
-			"generated_sql": state.get("generated_sql"),
-			"validated_sql": state.get("validated_sql"),
-			"retries": state.get("sql_generation_attempts", 0),
+			"generated_intent": state.get("generated_intent"),
+			"compiled_sql": state.get("compiled_sql"),
+			"retries": state.get("query_generation_attempts", 0),
 			"timing": state.get("timing", {}),
 			"cache_hit": state.get("cache_hit", False),
 			"provider": state.get("llm_provider"),
@@ -157,9 +160,9 @@ def _make_title(question: str) -> str:
 
 
 def _estimate_confidence(state: "GraphState") -> float:
-	"""Heuristic confidence: penalise retries and cache misses."""
+	"""Heuristic confidence: penalise retries."""
 	base = 0.95
-	retries = state.get("sql_generation_attempts", 0)
+	retries = state.get("query_generation_attempts", 0)
 	base -= retries * 0.1
 	return round(max(0.1, min(1.0, base)), 2)
 
@@ -208,7 +211,7 @@ def _build_success_visualization(rows: list[dict], columns: list[str], title: st
 		return "plain_text", None, plain_answer
 
 	metric_payload = _build_metric_visualization(rows, columns, title)
-	if metric_payload and preference == "card":
+	if metric_payload and preference in {"card", "auto"}:
 		return "metric_card", metric_payload, _summarize_metric(metric_payload)
 
 	chart_payload = _build_chart_visualization(rows, columns, title, preference)
@@ -262,7 +265,7 @@ def _build_metric_visualization(rows: list[dict], columns: list[str], title: str
 
 
 def _build_chart_visualization(rows: list[dict], columns: list[str], title: str, preference: str) -> dict | None:
-	if preference not in {"bar", "pie"}:
+	if preference not in {"bar", "pie", "auto"}:
 		return None
 
 	if len(rows) < 2 or len(rows) > 12 or len(columns) != 2:

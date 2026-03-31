@@ -8,9 +8,15 @@ import frappe
 import frappe.utils
 
 
-def make_query_hash(normalized_question: str) -> str:
-	"""Return SHA256 hex digest of the normalized question."""
-	return hashlib.sha256(normalized_question.encode("utf-8")).hexdigest()
+def make_query_hash(normalized_question: str, user: str | None = None) -> str:
+	"""
+	Return SHA256 hex digest of the (user, normalized_question) pair.
+
+	User-scoping prevents a cached result from User A being served to User B,
+	who may have different permissions and therefore different visible data.
+	"""
+	payload = f"{user or ''}:{normalized_question}"
+	return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def lookup_query_cache(query_hash: str) -> dict | None:
@@ -55,6 +61,7 @@ def save_query_cache(
 	sql: str,
 	result: dict,
 	ttl_hours: int = 24,
+	user: str | None = None,
 ) -> None:
 	"""
 	Insert a new cache record.  If a record with the same hash already exists

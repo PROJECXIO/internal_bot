@@ -5,14 +5,19 @@
     <link rel="icon" type="image/svg+xml" href="/assets/internal_bot/ai_chat/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ai_chat</title>
-    <script type="module" crossorigin src="/assets/internal_bot/ai_chat/assets/index-Dc4C33YS.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/internal_bot/ai_chat/assets/index-BPIJRf5X.css">
+    <script type="module" crossorigin src="/assets/internal_bot/ai_chat/assets/index-tPfJ3FH2.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/internal_bot/ai_chat/assets/index-B_KHDamC.css">
   </head>
   <body>
     <div id="app"></div>
 		<script>
 			window.csrf_token = '{{ frappe.session.csrf_token }}';
-			// TODO: load boot data here (context file is created in `www` directory)
+			// socketio_port is injected by Frappe (Jinja) in production.
+			// parseInt(...) || 9000 is a safe no-op fallback for Vite dev server
+			// where this Jinja template is not processed.
+			window.socketio_port = parseInt("{{ boot.socketio_port or 9000 }}", 10) || 9000;
+			// Frappe socket.io server uses per-site namespaces (/<sitename>).
+			window.site_name = '{{ frappe.local.site }}';
 		</script>
   </body>
 </html>

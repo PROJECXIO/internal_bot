@@ -9,8 +9,8 @@ class TestStructuredFormatter(FrappeTestCase):
 			"intent": "query",
 			"raw_message": message,
 			"normalized_question": message,
-			"sql_result_rows": rows,
-			"sql_generation_attempts": 0,
+			"query_result_rows": rows,
+			"query_generation_attempts": 0,
 			"max_rows": 100,
 		}
 

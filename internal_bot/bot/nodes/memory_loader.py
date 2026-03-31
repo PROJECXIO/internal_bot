@@ -8,11 +8,14 @@ import time
 
 from internal_bot.bot.services import memory as memory_svc
 from internal_bot.bot.state import GraphState
+from internal_bot.bot import progress
 
 
 def run(state: GraphState) -> dict:
 	t0 = time.monotonic()
 	node_name = "memory_loader"
+	if state.get("_emit_progress"):
+		progress.emit(state, node_name, "Loading conversation history")
 
 	settings = state.get("_settings")
 	window_size = settings.memory_window if settings else 10

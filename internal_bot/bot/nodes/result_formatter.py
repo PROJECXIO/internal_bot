@@ -10,11 +10,14 @@ import time
 from internal_bot.bot.services.formatter import format_structured_response
 from internal_bot.bot.services.formatter import normalize_cached_response
 from internal_bot.bot.state import GraphState
+from internal_bot.bot import progress
 
 
 def run(state: GraphState) -> dict:
 	t0 = time.monotonic()
 	node_name = "result_formatter"
+	if state.get("_emit_progress"):
+		progress.emit(state, node_name, "Preparing response")
 
 	# If this is a cache hit, the cached_result is the response
 	if state.get("cache_hit") and state.get("cached_result"):
@@ -24,8 +27,8 @@ def run(state: GraphState) -> dict:
 			response["debug"] = {
 				"normalized_question": state.get("normalized_question"),
 				"discovered_entities": state.get("discovered_doctypes", []),
-				"generated_sql": None,
-				"validated_sql": None,
+				"generated_intent": None,
+				"compiled_sql": None,
 				"retries": 0,
 				"timing": state.get("timing", {}),
 				"cache_hit": True,

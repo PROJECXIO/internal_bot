@@ -14,6 +14,7 @@ Response: see API contract in the implementation plan.
 """
 import os
 import time
+import uuid
 from pathlib import Path
 
 import frappe
@@ -78,7 +79,7 @@ def ask(message: str, session_id: str = None, debug: bool = False):
 		"start_time": time.monotonic(),
 		"node_trace": [],
 		"timing": {},
-		"sql_generation_attempts": 0,
+		"query_generation_attempts": 0,
 		"retries": 0,
 		"cache_hit": False,
 		"input_tokens": 0,
@@ -108,6 +109,84 @@ def ask(message: str, session_id: str = None, debug: bool = False):
 			"meta": {"confidence": 0.0, "error_detail": str(exc)},
 			"session_id": session_name,
 		}
+
+
+# ──────────────────────────────────────────────────────────────────
+# Async chat endpoints
+# ──────────────────────────────────────────────────────────────────
+
+
+@frappe.whitelist(methods=["POST"])
+def ask_async(message: str, session_id: str = None, debug: bool = False):
+    """
+    Async chat endpoint. Returns immediately with a job_id.
+
+    The pipeline runs in a background RQ worker. Progress events are
+    pushed to the browser via frappe.publish_realtime (Socket.io).
+    The final response arrives as a bot_progress event with is_complete=True.
+
+    Use ask_status(job_id) as a polling fallback if Socket.io is unavailable.
+    """
+    user = frappe.session.user
+    if not user or user == "Guest":
+        frappe.throw(_("You must be logged in to use the chat."), frappe.AuthenticationError)
+
+    if not message or not message.strip():
+        return {
+            "status": "error",
+            "reason": "Message cannot be empty.",
+        }
+
+    session_name = _get_or_create_session(user, session_id=session_id)
+    job_id = str(uuid.uuid4())
+
+    frappe.enqueue(
+        "internal_bot.bot.pipeline_job.run_pipeline_job",
+        queue="default",
+        timeout=120,
+        job_id=job_id,          # sets RQ's own job ID for deduplication/lookup
+        user=user,
+        message=message.strip(),
+        session_name=session_name,
+        pipeline_job_id=job_id,  # forwarded to run_pipeline_job() for progress/cache keys
+        debug=bool(debug),
+    )
+
+    return {
+        "status": "queued",
+        "job_id": job_id,
+        "session_id": session_name,
+    }
+
+
+@frappe.whitelist()
+def ask_status(job_id: str):
+    """
+    Polling fallback for ask_async(). Returns the job result if available.
+
+    Use this when Socket.io events cannot be received (e.g. proxy that blocks
+    WebSocket upgrades). Poll at ~2s intervals until status != 'running'.
+    """
+    user = frappe.session.user
+    if not user or user == "Guest":
+        frappe.throw(_("You must be logged in to use the chat."), frappe.AuthenticationError)
+
+    if not job_id:
+        return {"status": "error", "reason": "job_id is required"}
+
+    try:
+        raw = frappe.cache().get_value(f"bot_result:{job_id}")
+    except Exception:
+        raw = None
+
+    if not raw:
+        return {"status": "running", "response": None}
+
+    try:
+        result = frappe.parse_json(raw)
+        return result
+    except Exception:
+        return {"status": "error", "reason": "Failed to parse job result"}
 
 
 # ──────────────────────────────────────────────────────────────────

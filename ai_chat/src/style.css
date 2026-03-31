@@ -202,3 +202,64 @@ body,
     border-bottom: 1px solid rgba(148, 163, 184, 0.2);
   }
 }
+
+/* ── Progress timeline ──────────────────────────────────────────── */
+
+/* Step fade-in (TransitionGroup) */
+.step-enter-active {
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+.step-enter-from {
+  opacity: 0;
+  transform: translateY(5px);
+}
+
+/* Active step: pulsing dot ring */
+.progress-step-active-dot {
+  animation: pulse-ring 1.4s ease infinite;
+}
+
+@keyframes pulse-ring {
+  0%   { filter: drop-shadow(0 0 0px rgba(65, 187, 147, 0.6)); }
+  50%  { filter: drop-shadow(0 0 3px rgba(65, 187, 147, 0.6)); }
+  100% { filter: drop-shadow(0 0 0px rgba(65, 187, 147, 0.0)); }
+}
+
+/* Animated ellipsis for active step label */
+.progress-ellipsis::after {
+  content: "";
+  display: inline-block;
+  width: 1ch;
+  animation: ellipsis 1.2s steps(4, end) infinite;
+}
+
+@keyframes ellipsis {
+  0%   { content: ""; }
+  25%  { content: "."; }
+  50%  { content: ".."; }
+  75%  { content: "..."; }
+  100% { content: ""; }
+}
+
+/* Metric card accent border */
+.metric-card {
+  border-left: 3px solid #41BB93;
+}
+
+/* ── Connection banner slide ────────────────────────────────────── */
+
+.banner-enter-active,
+.banner-leave-active {
+  transition: max-height 0.25s ease, opacity 0.25s ease;
+  overflow: hidden;
+}
+.banner-enter-from,
+.banner-leave-to {
+  max-height: 0;
+  opacity: 0;
+}
+.banner-enter-to,
+.banner-leave-from {
+  max-height: 2.5rem;
+  opacity: 1;
+}

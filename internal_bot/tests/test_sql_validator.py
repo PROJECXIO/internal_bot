@@ -1,5 +1,5 @@
 """
-Level 1 — Pure unit tests for sql_service.validate_sql and execute helpers.
+Level 1 — Pure unit tests for sql_service.
 
 Run without Frappe context:
   cd /home/frappeuser/frappe-bench-v15/apps/internal_bot
@@ -7,16 +7,17 @@ Run without Frappe context:
 """
 import sys
 import os
+from unittest.mock import MagicMock
 
 # Allow running standalone (without bench context)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 import pytest
-from internal_bot.bot.services.sql_service import validate_sql, _enforce_limit, _extract_sql
+from internal_bot.bot.services.sql_service import validate_sql, _extract_json_block, generate_query_intent
 
 
 # ──────────────────────────────────────────────────────────────────
-# validate_sql — allowed queries
+# validate_sql — defense-in-depth checks (still used by compiler)
 # ──────────────────────────────────────────────────────────────────
 
 class TestValidateSqlAllowed:
@@ -50,10 +51,6 @@ class TestValidateSqlAllowed:
 		is_valid, reason = validate_sql(sql)
 		assert is_valid, reason
 
-
-# ──────────────────────────────────────────────────────────────────
-# validate_sql — blocked statements
-# ──────────────────────────────────────────────────────────────────
 
 class TestValidateSqlBlocked:
 	def test_blocks_insert(self):
@@ -103,15 +100,12 @@ class TestValidateSqlBlocked:
 		assert not is_valid
 
 	def test_blocks_subquery_with_delete(self):
-		# Attacker tries to embed DELETE in a subquery comment trick
 		sql = "SELECT 1; DELETE FROM `tabCustomer`"
 		is_valid, reason = validate_sql(sql)
 		assert not is_valid
 
 	def test_blocks_insert_in_comment_like_position(self):
 		sql = "SELECT * FROM `tabCustomer` WHERE name = 'x' -- INSERT INTO foo VALUES (1)"
-		# The comment contains INSERT — regex should still catch it
-		# (This is intentionally strict for Phase 1)
 		is_valid, reason = validate_sql(sql)
 		assert not is_valid
 
@@ -128,50 +122,88 @@ class TestValidateSqlBlocked:
 
 
 # ──────────────────────────────────────────────────────────────────
-# _enforce_limit helper
+# _extract_json_block helper
 # ──────────────────────────────────────────────────────────────────
 
-class TestEnforceLimit:
-	def test_adds_limit_when_absent(self):
-		sql = "SELECT name FROM `tabCustomer`"
-		result = _enforce_limit(sql, 100)
-		assert "LIMIT 100" in result
-
-	def test_keeps_limit_when_within_max(self):
-		sql = "SELECT name FROM `tabCustomer` LIMIT 20"
-		result = _enforce_limit(sql, 100)
-		assert "LIMIT 20" in result
-
-	def test_caps_limit_when_exceeds_max(self):
-		sql = "SELECT name FROM `tabCustomer` LIMIT 500"
-		result = _enforce_limit(sql, 100)
-		assert "LIMIT 100" in result
-		assert "LIMIT 500" not in result
-
-	def test_strips_semicolon_before_adding_limit(self):
-		sql = "SELECT name FROM `tabCustomer`;"
-		result = _enforce_limit(sql, 50)
-		assert result.endswith("LIMIT 50")
-		assert ";" not in result
-
-
-# ──────────────────────────────────────────────────────────────────
-# _extract_sql helper
-# ──────────────────────────────────────────────────────────────────
-
-class TestExtractSql:
-	def test_extracts_from_sql_fence(self):
-		raw = "```sql\nSELECT name FROM `tabCustomer` LIMIT 10\n```"
-		assert _extract_sql(raw) == "SELECT name FROM `tabCustomer` LIMIT 10"
+class TestExtractJsonBlock:
+	def test_extracts_from_json_fence(self):
+		raw = '```json\n{"mode": "list"}\n```'
+		assert _extract_json_block(raw) == '{"mode": "list"}'
 
 	def test_extracts_from_plain_fence(self):
-		raw = "```\nSELECT 1\n```"
-		assert _extract_sql(raw) == "SELECT 1"
+		raw = '```\n{"mode": "analytics"}\n```'
+		assert _extract_json_block(raw) == '{"mode": "analytics"}'
 
 	def test_returns_raw_if_no_fence(self):
-		raw = "SELECT name FROM `tabCustomer`"
-		assert _extract_sql(raw) == raw
+		raw = '{"mode": "list", "doctype": "Customer"}'
+		assert _extract_json_block(raw) == raw
 
 	def test_strips_whitespace(self):
-		raw = "  SELECT 1  "
-		assert _extract_sql(raw) == "SELECT 1"
+		raw = '  {"mode": "list"}  '
+		assert _extract_json_block(raw) == '{"mode": "list"}'
+
+
+# ──────────────────────────────────────────────────────────────────
+# generate_query_intent — LLM call + JSON parsing
+# ──────────────────────────────────────────────────────────────────
+
+def _mock_llm(response: str) -> MagicMock:
+	client = MagicMock()
+	client.chat_completion.return_value = response
+	client.last_input_tokens = 5
+	client.last_output_tokens = 10
+	return client
+
+
+class TestGenerateQueryIntent:
+	def test_returns_valid_list_intent(self):
+		raw = '{"mode": "list", "doctype": "Customer", "fields": ["name"], "filters": [], "limit": 10}'
+		llm = _mock_llm(raw)
+		intent = generate_query_intent("show customers", "", "", llm)
+		assert intent["mode"] == "list"
+		assert intent["doctype"] == "Customer"
+
+	def test_returns_valid_analytics_intent(self):
+		raw = '{"mode": "analytics", "primary_doctype": "Sales Invoice", "dimensions": ["customer"], "metrics": [{"func": "SUM", "field": "grand_total", "alias": "total"}], "filters": [], "limit": 20}'
+		llm = _mock_llm(raw)
+		intent = generate_query_intent("total sales by customer", "", "", llm)
+		assert intent["mode"] == "analytics"
+		assert intent["primary_doctype"] == "Sales Invoice"
+
+	def test_strips_markdown_fences(self):
+		raw = '```json\n{"mode": "list", "doctype": "Customer", "fields": ["name"], "filters": [], "limit": 5}\n```'
+		llm = _mock_llm(raw)
+		intent = generate_query_intent("show customers", "", "", llm)
+		assert intent["mode"] == "list"
+
+	def test_raises_on_non_json(self):
+		llm = _mock_llm("SELECT name FROM tabCustomer LIMIT 10")
+		with pytest.raises(ValueError, match="not valid JSON"):
+			generate_query_intent("show customers", "", "", llm)
+
+	def test_raises_on_wrong_mode(self):
+		raw = '{"mode": "sql", "query": "SELECT 1"}'
+		llm = _mock_llm(raw)
+		with pytest.raises(ValueError, match="mode"):
+			generate_query_intent("show customers", "", "", llm)
+
+	def test_raises_if_list_mode_missing_doctype(self):
+		raw = '{"mode": "list", "fields": ["name"], "filters": [], "limit": 10}'
+		llm = _mock_llm(raw)
+		with pytest.raises(ValueError, match="doctype"):
+			generate_query_intent("show customers", "", "", llm)
+
+	def test_raises_if_analytics_mode_missing_metrics(self):
+		raw = '{"mode": "analytics", "primary_doctype": "Sales Invoice", "dimensions": ["customer"], "filters": []}'
+		llm = _mock_llm(raw)
+		with pytest.raises(ValueError, match="metrics"):
+			generate_query_intent("total sales", "", "", llm)
+
+	def test_retry_context_added_when_attempt_gt_zero(self):
+		raw = '{"mode": "list", "doctype": "Customer", "fields": ["name"], "filters": [], "limit": 10}'
+		llm = _mock_llm(raw)
+		generate_query_intent("show customers", "", "", llm, attempt=1, previous_error="DB error")
+		call_args = llm.chat_completion.call_args
+		user_message = call_args[0][0][1]["content"]
+		assert "DB error" in user_message
+		assert "attempt 1" in user_message.lower() or "previous attempt" in user_message.lower()

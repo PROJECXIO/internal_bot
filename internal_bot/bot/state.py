@@ -8,63 +8,61 @@ from typing import Any, Optional, TypedDict
 
 
 class GraphState(TypedDict, total=False):
-	# ── Inputs (set at graph entry) ─────────────────────────────────
-	user: str               # frappe.session.user
-	raw_message: str        # original user input
-	session_name: str       # AI Chat Session document name
-	debug: bool             # include debug fields in response?
-	max_rows: int           # from AI Provider Settings.max_result_rows
+    # ── Inputs (set at graph entry) ─────────────────────────────────
+    user: str               # frappe.session.user
+    raw_message: str        # original user input
+    session_name: str       # AI Chat Session document name
+    debug: bool             # include debug fields in response?
+    max_rows: int           # from AI Provider Settings.max_result_rows
 
-	# ── Node 1: Intent Parser ────────────────────────────────────────
-	normalized_question: str
-	intent: str             # "greeting" | "query" | "clarification_needed" | "blocked"
-	intent_reason: str      # free-text reason (shown for blocked/clarification)
-	clarification_options: list  # options list for clarification_needed
+    # ── Node 1: Intent Parser ────────────────────────────────────────
+    normalized_question: str
+    intent: str             # "greeting" | "query" | "clarification_needed" | "blocked"
+    intent_reason: str      # free-text reason (shown for blocked/clarification)
+    clarification_options: list  # options list for clarification_needed
 
-	# ── Node 2: Memory Loader ────────────────────────────────────────
-	chat_history: list      # [{"role": "user"|"assistant", "content": "..."}]
-	memory_summary: str     # rolling LLM summary of older messages
+    # ── Node 2: Memory Loader ────────────────────────────────────────
+    chat_history: list      # [{"role": "user"|"assistant", "content": "..."}]
+    memory_summary: str     # rolling LLM summary of older messages
 
-	# ── Node 3: Schema Discovery ─────────────────────────────────────
-	discovered_doctypes: list   # ["Sales Invoice", "Customer", ...]
-	schema_context: str         # Markdown-formatted schema for LLM prompt
+    # ── Node 3: Schema Discovery ─────────────────────────────────────
+    discovered_doctypes: list   # ["Sales Invoice", "Customer", ...]
+    schema_context: str         # Markdown-formatted schema for LLM prompt
 
-	# ── Node 8: Cache Check (runs before SQL gen) ────────────────────
-	cache_hit: bool
-	cached_result: Optional[dict]
+    # ── Node 8: Cache Check (runs before query planning) ────────────
+    cache_hit: bool
+    cached_result: Optional[dict]
 
-	# ── Node 4: SQL Generator ────────────────────────────────────────
-	generated_sql: str
-	sql_generation_attempts: int    # 0-3
-	sql_generation_error: str
+    # ── Node: Query Planner (replaces sql_generator + validator + executor) ──
+    generated_intent: Optional[dict]    # raw JSON intent from LLM (for audit logging)
+    validated_intent: Optional[dict]    # intent after permission re-check
+    compiled_sql: Optional[str]         # analytics mode only; None for list mode
+    query_result_rows: list             # list of row dicts
+    query_execution_error: str
+    query_is_valid: bool
+    query_invalid_reason: str
+    query_generation_attempts: int      # 0–3 (retry counter)
 
-	# ── Node 5: SQL Validator ────────────────────────────────────────
-	validated_sql: str
-	sql_is_valid: bool
-	sql_invalid_reason: str
+    # ── Node 7: Result Formatter ─────────────────────────────────────
+    formatted_response: dict    # final API response
+    response_type: str          # "metric_card" | "bar_chart" | "pie_chart" | "table" | "empty"
+    visualization: Optional[dict]
+    summary: str
+    visualization_preference: str  # "auto" | "card" | "bar" | "pie"
 
-	# ── Node 6: SQL Executor ─────────────────────────────────────────
-	sql_result_rows: list   # list of row dicts
-	sql_execution_error: str
+    # ── Per-request injected objects (must be in schema for LangGraph to preserve) ──
+    _llm_client: Any   # LLMClient instance, injected in chat.py
+    _settings: Any     # AI Provider Settings doc, injected in chat.py
+    _job_id: str       # UUID4 string, injected by ask_async(); empty in sync path
+    _emit_progress: bool  # True only in async path; absent/False in sync ask()
 
-	# ── Node 7: Result Formatter ─────────────────────────────────────
-	formatted_response: dict    # final API response
-	response_type: str          # "metric_card" | "bar_chart" | "pie_chart" | "table" | "empty"
-	visualization: Optional[dict]
-	summary: str
-	visualization_preference: str  # "auto" | "card" | "bar" | "pie"
-
-	# ── Per-request injected objects (must be in schema for LangGraph to preserve) ──
-	_llm_client: Any   # LLMClient instance, injected in chat.py
-	_settings: Any     # AI Provider Settings doc, injected in chat.py
-
-	# ── Observability (accumulated across nodes) ─────────────────────
-	start_time: float               # time.monotonic() at graph entry
-	node_trace: list                # ordered list of visited node names
-	timing: dict                    # {node_name: elapsed_ms}
-	llm_provider: str
-	llm_model: str
-	input_tokens: int
-	output_tokens: int
-	retries: int                    # total SQL gen retries
-	result_row_count: int
+    # ── Observability (accumulated across nodes) ─────────────────────
+    start_time: float               # time.monotonic() at graph entry
+    node_trace: list                # ordered list of visited node names
+    timing: dict                    # {node_name: elapsed_ms}
+    llm_provider: str
+    llm_model: str
+    input_tokens: int
+    output_tokens: int
+    retries: int                    # total query planning retries
+    result_row_count: int

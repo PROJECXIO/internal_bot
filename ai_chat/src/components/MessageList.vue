@@ -1,20 +1,11 @@
 <template>
-  <div ref="containerRef" class="flex flex-col gap-4 px-4 py-4 overflow-y-auto">
+  <div ref="containerRef" class="flex flex-col gap-4 px-4 py-4 overflow-y-auto" @scroll="onScroll">
     <template v-for="(message, i) in messages" :key="i">
       <MessageBubble :message="message" @option="$emit('option', $event)" />
     </template>
 
-    <!-- Loading dots -->
-    <div v-if="loading" class="flex justify-start">
-      <div class="w-7 h-7 flex items-center justify-center mr-2 mt-1 shrink-0">
-        <RevenyuCut class="w-5 h-5" />
-      </div>
-      <div class="bg-brand-light rounded-2xl rounded-bl-sm px-4 py-3 flex gap-1 items-center">
-        <span class="w-1.5 h-1.5 rounded-full bg-brand animate-bounce" style="animation-delay: 0ms" />
-        <span class="w-1.5 h-1.5 rounded-full bg-brand animate-bounce" style="animation-delay: 150ms" />
-        <span class="w-1.5 h-1.5 rounded-full bg-brand animate-bounce" style="animation-delay: 300ms" />
-      </div>
-    </div>
+    <!-- Progress timeline (replaces static bouncing dots) -->
+    <ProgressTimeline v-if="loading" :steps="progressSteps" />
 
     <!-- Empty state -->
     <div
@@ -30,21 +21,29 @@
 <script setup>
 import { ref } from "vue";
 import MessageBubble from "./MessageBubble.vue";
-import RevenyuCut from "./RevenyuCut.vue";
+import ProgressTimeline from "./ProgressTimeline.vue";
 import RevenyuLogo from "./RevenyuLogo.vue";
 
 defineProps({
   messages: { type: Array, required: true },
   loading: { type: Boolean, default: false },
+  progressSteps: { type: Array, default: () => [] },
 });
 
 defineEmits(["option"]);
 
 const containerRef = ref(null);
+const isLockedToBottom = ref(true);
+
+function onScroll() {
+  const el = containerRef.value;
+  if (!el) return;
+  isLockedToBottom.value = el.scrollTop + el.clientHeight >= el.scrollHeight - 40;
+}
 
 function scrollToBottom() {
   const el = containerRef.value;
-  if (el) el.scrollTop = el.scrollHeight;
+  if (el && isLockedToBottom.value) el.scrollTop = el.scrollHeight;
 }
 
 defineExpose({ scrollToBottom });

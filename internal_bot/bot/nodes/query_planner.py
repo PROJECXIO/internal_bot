@@ -23,7 +23,7 @@ import frappe
 
 from internal_bot.bot.services import permission_service, query_executor, sql_service
 from internal_bot.bot.state import GraphState
-from internal_bot.bot import progress
+from internal_bot.bot import progress, trace
 
 _MAX_RETRIES = 3
 
@@ -33,6 +33,8 @@ def run(state: GraphState) -> dict:
     node_name = "query_planner"
 
     attempt = state.get("query_generation_attempts") or 0
+    extra = None if attempt == 0 else f"(attempt {attempt + 1}/{_MAX_RETRIES})"
+    log_t0 = trace.node_start(state, node_name, extra=extra)
     if state.get("_emit_progress"):
         label = (
             "Planning query"
@@ -47,7 +49,7 @@ def run(state: GraphState) -> dict:
             "query_is_valid": False,
             "query_invalid_reason": "No LLM client configured",
             "query_generation_attempts": _MAX_RETRIES,  # force give_up
-        })
+        }, log_t0)
 
     user = state.get("user") or frappe.session.user
     settings = state.get("_settings")
@@ -70,6 +72,8 @@ def run(state: GraphState) -> dict:
         or state.get("query_invalid_reason")
         or None
     )
+    if attempt > 0:
+        trace.retry_banner(state, node_name, attempt + 1, _MAX_RETRIES, previous_error)
 
     # ── Step 1: LLM generates a JSON query intent ─────────────────────
     try:
@@ -87,6 +91,7 @@ def run(state: GraphState) -> dict:
         output_tokens = (state.get("output_tokens") or 0) + (
             getattr(llm_client, "last_output_tokens", 0) or 0
         )
+        trace.detail(state, "Generated intent", intent)
     except Exception as exc:
         frappe.log_error(message=str(exc), title="QueryPlanner LLM error")
         return _update(state, node_name, t0, {
@@ -102,12 +107,13 @@ def run(state: GraphState) -> dict:
             ),
             "llm_provider": getattr(llm_client, "provider", ""),
             "llm_model": getattr(llm_client, "model", ""),
-        })
+        }, log_t0)
 
     # ── Step 2: Permission re-check on the selected DocType ───────────
     # The LLM only sees permitted DocTypes in schema_context, but it may
     # hallucinate a DocType name not in the list.
     primary_doctype = intent.get("doctype") or intent.get("primary_doctype")
+    trace.detail(state, "Primary doctype", primary_doctype)
     if not primary_doctype or not permission_service.check_doctype_read_access(
         primary_doctype, user
     ):
@@ -124,11 +130,12 @@ def run(state: GraphState) -> dict:
             "output_tokens": output_tokens,
             "llm_provider": getattr(llm_client, "provider", ""),
             "llm_model": getattr(llm_client, "model", ""),
-        })
+        }, log_t0)
 
     # ── Step 3: Execute ───────────────────────────────────────────────
     try:
         rows, compiled_sql = query_executor.execute_query_intent(intent, user, max_rows)
+        trace.detail(state, "SQL execution", f"SUCCESS - {len(rows)} row(s)")
         return _update(state, node_name, t0, {
             "generated_intent": intent,
             "validated_intent": intent,
@@ -144,9 +151,10 @@ def run(state: GraphState) -> dict:
             "output_tokens": output_tokens,
             "llm_provider": getattr(llm_client, "provider", ""),
             "llm_model": getattr(llm_client, "model", ""),
-        })
+        }, log_t0)
     except frappe.PermissionError as exc:
         # Permission errors are not retryable — force give_up immediately
+        trace.detail(state, "SQL execution", f"PERMISSION ERROR - {exc}")
         return _update(state, node_name, t0, {
             "generated_intent": intent,
             "query_is_valid": False,
@@ -157,8 +165,9 @@ def run(state: GraphState) -> dict:
             "output_tokens": output_tokens,
             "llm_provider": getattr(llm_client, "provider", ""),
             "llm_model": getattr(llm_client, "model", ""),
-        })
+        }, log_t0)
     except Exception as exc:
+        trace.detail(state, "SQL execution", f"FAILED - {exc}")
         return _update(state, node_name, t0, {
             "generated_intent": intent,
             "query_is_valid": False,
@@ -169,12 +178,14 @@ def run(state: GraphState) -> dict:
             "output_tokens": output_tokens,
             "llm_provider": getattr(llm_client, "provider", ""),
             "llm_model": getattr(llm_client, "model", ""),
-        })
+        }, log_t0)
 
 
-def _update(state: GraphState, node_name: str, t0: float, updates: dict) -> dict:
+def _update(state: GraphState, node_name: str, t0: float, updates: dict, log_t0: float) -> dict:
     elapsed = round((time.monotonic() - t0) * 1000, 2)
     trace = list(state.get("node_trace") or []) + [node_name]
     timing = dict(state.get("timing") or {})
     timing[node_name] = elapsed
+    from internal_bot.bot import trace as bench_trace
+    bench_trace.node_end(state, node_name, log_t0)
     return {**updates, "node_trace": trace, "timing": timing}

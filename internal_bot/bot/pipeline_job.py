@@ -15,6 +15,7 @@ import frappe
 from dotenv import load_dotenv
 
 from internal_bot.bot import progress
+from internal_bot.bot import trace
 from internal_bot.bot.graph import get_graph
 from internal_bot.bot.services.llm_client import get_llm_client
 
@@ -101,6 +102,15 @@ def run_pipeline_job(
     }
 
     try:
+        trace.request_start(
+            initial_state,
+            [
+                f'Question: "{message.strip()}"',
+                f"Session: {session_name}",
+                f"Job: {pipeline_job_id}",
+                "Invoking graph...",
+            ],
+        )
         graph = get_graph()
         final_state = graph.invoke(initial_state)
         response = final_state.get("formatted_response") or {
@@ -112,6 +122,7 @@ def run_pipeline_job(
 
         _store_result(pipeline_job_id, {"status": "complete", "response": response})
         progress.emit_complete(final_state, response)
+        trace.request_complete(final_state, response)
 
     except Exception as exc:
         frappe.log_error(
@@ -126,6 +137,7 @@ def run_pipeline_job(
         }
         _store_result(pipeline_job_id, {"status": "error", "response": error_response})
         progress.emit_error(initial_state, user=user)
+        trace.request_error(initial_state, str(exc))
 
 
 def _store_result(job_id: str, result: dict) -> None:

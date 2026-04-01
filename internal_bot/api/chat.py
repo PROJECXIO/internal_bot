@@ -23,6 +23,7 @@ from frappe import _
 
 from internal_bot.bot.graph import get_graph
 from internal_bot.bot.services.llm_client import get_llm_client
+from internal_bot.bot import trace
 
 # Load LangSmith (and other) env vars from the app-level .env file.
 # This runs once per worker process when the module is first imported.
@@ -92,6 +93,14 @@ def ask(message: str, session_id: str = None, debug: bool = False):
 
 	# Run the LangGraph pipeline
 	try:
+		trace.request_start(
+			initial_state,
+			[
+				f'Question: "{message.strip()}"',
+				f"Session: {session_name}",
+				"Invoking graph...",
+			],
+		)
 		graph = get_graph()
 		final_state = graph.invoke(initial_state)
 		response = final_state.get("formatted_response") or {
@@ -100,9 +109,11 @@ def ask(message: str, session_id: str = None, debug: bool = False):
 			"meta": {"confidence": 0.0},
 		}
 		response["session_id"] = session_name
+		trace.request_complete(final_state, response)
 		return response
 	except Exception as exc:
 		frappe.log_error(message=frappe.get_traceback(), title="Internal Bot: graph invoke failed")
+		trace.request_error(initial_state, str(exc))
 		return {
 			"status": "error",
 			"reason": "An internal error occurred. Please try again.",

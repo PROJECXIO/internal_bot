@@ -29,6 +29,10 @@ class GraphState(TypedDict, total=False):
     discovered_doctypes: list   # ["Sales Invoice", "Customer", ...]
     schema_context: str         # Markdown-formatted schema for LLM prompt
 
+    # ── Node: Clarification Planner ──────────────────────────────────
+    ready_to_query: bool         # True = proceed to query_planner
+    clarification_question: str  # question to show the user when not ready
+
     # ── Node: Query Planner (replaces sql_generator + validator + executor) ──
     generated_intent: Optional[dict]    # raw JSON intent from LLM (for audit logging)
     validated_intent: Optional[dict]    # intent after permission re-check

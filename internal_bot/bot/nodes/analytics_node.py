@@ -13,12 +13,13 @@ import frappe
 
 from internal_bot.bot.services import analytics_service, memory as memory_svc
 from internal_bot.bot.state import GraphState
-from internal_bot.bot import progress
+from internal_bot.bot import progress, trace
 
 
 def run(state: GraphState) -> dict:
     t0 = time.monotonic()
     node_name = "analytics"
+    log_t0 = trace.node_start(state, node_name)
     if state.get("_emit_progress"):
         progress.emit(state, node_name, "Saving results")
 
@@ -26,6 +27,7 @@ def run(state: GraphState) -> dict:
     session_name = state.get("session_name") or ""
     response = state.get("formatted_response") or {}
     status = response.get("status", "error")
+    trace.detail(state, "Persisting status", status)
 
     # ── 1. Persist chat messages ─────────────────────────────────────
     if session_name:
@@ -111,7 +113,7 @@ def run(state: GraphState) -> dict:
         result_row_count=state.get("result_row_count") or 0,
     )
 
-    return _update(state, node_name, t0, {})
+    return _update(state, node_name, t0, {}, log_t0)
 
 
 def _response_to_text(response: dict) -> str:
@@ -130,9 +132,11 @@ def _response_to_text(response: dict) -> str:
         return response.get("reason", "Error.")
 
 
-def _update(state: GraphState, node_name: str, t0: float, updates: dict) -> dict:
+def _update(state: GraphState, node_name: str, t0: float, updates: dict, log_t0: float) -> dict:
     elapsed = round((time.monotonic() - t0) * 1000, 2)
     trace = list(state.get("node_trace") or []) + [node_name]
     timing = dict(state.get("timing") or {})
     timing[node_name] = elapsed
+    from internal_bot.bot import trace as bench_trace
+    bench_trace.node_end(state, node_name, log_t0)
     return {**updates, "node_trace": trace, "timing": timing}

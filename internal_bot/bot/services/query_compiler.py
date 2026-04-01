@@ -141,6 +141,14 @@ def compile_analytics_intent(
             where_parts.append(f"{col} {op} ({placeholders})")
             params.extend(values_list)
         elif op.lower() == "between":
+            # Guard: skip if either bound is a date-preset string (LLM mistake)
+            _DATE_PRESETS = {
+                "today", "yesterday", "this_week", "this_month",
+                "last_month", "this_year", "last_30_days",
+            }
+            v0, v1 = str(value[0]).lower(), str(value[1]).lower()
+            if v0 in _DATE_PRESETS or v1 in _DATE_PRESETS:
+                continue  # date_range block will handle this correctly
             where_parts.append(f"{col} BETWEEN %s AND %s")
             params.extend([value[0], value[1]])
         else:

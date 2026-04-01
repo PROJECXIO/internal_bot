@@ -84,8 +84,8 @@ Examples: "total sales by customer this month", "how many invoices submitted tod
 3. Field names must match exactly (snake_case as shown in schema).
 4. Allowed filter operators: =, !=, >, <, >=, <=, like, in, not in, between, is
 5. Allowed aggregate functions: SUM, COUNT, AVG, MAX, MIN, COUNT_DISTINCT
-6. Allowed date presets: today, yesterday, this_week, this_month, last_month, \
-this_year, last_30_days
+6. Allowed date presets (use ONLY inside date_range.preset): today, yesterday, \
+this_week, this_month, last_month, this_year, last_30_days
 7. limit must be ≤ 100.
 8. joins list may be empty [].
 9. date_range may be omitted entirely.
@@ -95,6 +95,15 @@ Sales Order, Stock Entry, Payment Entry, Journal Entry, Delivery Note, \
 Purchase Receipt, etc.) ALWAYS add ["docstatus", "=", 1] to filters to \
 include only submitted/confirmed records. The "docstatus" field is always \
 available in the schema.
+12. NEVER put date preset names (today, this_year, this_month, etc.) as values \
+inside the filters array. Date presets belong ONLY in date_range.preset. \
+For date filtering always use date_range, never a filter with a preset string.
+13. Do NOT add date_range unless the user explicitly mentions a time period \
+(e.g. "this month", "last year", "today", "in 2024"). If no period is \
+mentioned, omit date_range entirely.
+14. Do NOT add dimensions unless the user explicitly asks for a breakdown or \
+grouping (e.g. "by customer", "per month", "grouped by"). For a plain \
+total or count with no grouping requested, leave dimensions as [].
 """
 
 

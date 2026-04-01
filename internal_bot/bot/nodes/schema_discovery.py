@@ -18,23 +18,36 @@ import frappe
 
 from internal_bot.bot.services import schema as schema_svc
 from internal_bot.bot.state import GraphState
-from internal_bot.bot import progress
+from internal_bot.bot import progress, trace
 
 
-# Common ERP stop words to ignore during keyword extraction
+# Common ERP stop words to ignore during keyword extraction.
+# Includes generic English words that happen to match ERP DocType names
+# but carry no entity-selection meaning in a query (e.g. "period", "summary").
 _STOP_WORDS = {
+    # Articles / prepositions / conjunctions
     "show", "me", "all", "the", "a", "an", "of", "in", "for", "and",
-    "or", "is", "are", "was", "were", "what", "how", "many", "total",
-    "list", "give", "get", "find", "fetch", "today", "yesterday",
-    "last", "this", "month", "year", "week", "date", "time", "by",
-    "from", "to", "with", "on", "at", "between", "latest", "recent",
-    "per", "each", "every", "day", "days", "count", "number", "num",
+    "or", "is", "are", "was", "were", "what", "how", "by", "from",
+    "to", "with", "on", "at", "between", "about", "into", "over",
+    # Question / action words
+    "give", "get", "find", "fetch", "list", "tell", "display", "return",
+    # Time words (match too many DocTypes with "Period", "Date", etc.)
+    "today", "yesterday", "last", "this", "month", "year", "week",
+    "date", "time", "per", "each", "every", "day", "days", "period",
+    "latest", "recent", "current", "previous", "past", "next",
+    # Aggregation words
+    "total", "count", "number", "num", "many", "sum", "average", "avg",
+    # Generic report/query words that don't map to a DocType
+    "summary", "report", "overview", "analysis", "breakdown", "detail",
+    "details", "data", "info", "information", "record", "records",
+    "result", "results", "figure", "figures",
 }
 
 
 def run(state: GraphState) -> dict:
     t0 = time.monotonic()
     node_name = "schema_discovery"
+    log_t0 = trace.node_start(state, node_name)
     if state.get("_emit_progress"):
         progress.emit(state, node_name, "Looking at relevant data")
 
@@ -44,18 +57,20 @@ def run(state: GraphState) -> dict:
     blocked = settings.get_blocked_doctype_list() if settings else []
 
     keywords = _extract_keywords(question)
+    trace.detail(state, "Keywords", keywords)
 
     if not keywords:
         return _update(state, node_name, t0, {
             "discovered_doctypes": [],
             "schema_context": "",
-        })
+        }, log_t0)
 
     # Gate 1: discover_permitted_doctypes filters by frappe.has_permission
     discovered_rows = schema_svc.discover_permitted_doctypes(keywords, user, blocked)
     # Re-rank by match quality so the most relevant DocType isn't cut off by the cap
     discovered_rows = _rank_by_relevance(discovered_rows, keywords)
     discovered_names = [r["name"] for r in discovered_rows]
+    trace.detail(state, "Discovered doctypes", discovered_names[:5])
 
     # Enrich each discovered DocType with permission-filtered fields and links
     enriched = []
@@ -79,7 +94,7 @@ def run(state: GraphState) -> dict:
     return _update(state, node_name, t0, {
         "discovered_doctypes": discovered_names,
         "schema_context": schema_ctx,
-    })
+    }, log_t0)
 
 
 def _rank_by_relevance(rows: list, keywords: list) -> list:
@@ -99,15 +114,17 @@ def _rank_by_relevance(rows: list, keywords: list) -> list:
 def _extract_keywords(question: str) -> list:
     """Extract meaningful noun-like tokens from the question."""
     words = re.findall(r"[a-z]+", question.lower())
-    keywords = [w for w in words if w not in _STOP_WORDS and len(w) > 2]
+    keywords = list(dict.fromkeys(w for w in words if w not in _STOP_WORDS and len(w) > 2))
     # Also add 2-gram combinations (e.g. "sales invoice", "purchase order")
     bigrams = [f"{keywords[i]} {keywords[i+1]}" for i in range(len(keywords) - 1)]
     return list(dict.fromkeys(keywords + bigrams))  # deduplicate, preserve order
 
 
-def _update(state: GraphState, node_name: str, t0: float, updates: dict) -> dict:
+def _update(state: GraphState, node_name: str, t0: float, updates: dict, log_t0: float) -> dict:
     elapsed = round((time.monotonic() - t0) * 1000, 2)
     trace = list(state.get("node_trace") or []) + [node_name]
     timing = dict(state.get("timing") or {})
     timing[node_name] = elapsed
+    from internal_bot.bot import trace as bench_trace
+    bench_trace.node_end(state, node_name, log_t0)
     return {**updates, "node_trace": trace, "timing": timing}

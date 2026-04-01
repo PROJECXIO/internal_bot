@@ -170,6 +170,11 @@
    "if_owner": 1,
    "read": 1,
    "role": "All"
+  },
+  {
+   "read": 1,
+   "write": 1,
+   "role": "AI User"
   }
  ],
  "sort_field": "creation",

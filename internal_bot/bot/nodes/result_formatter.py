@@ -3,12 +3,10 @@ Node 7 — Result Formatter
 
 Builds the final structured JSON response dict and stores it in state.
 Handles all four status codes: success, clarification_needed, blocked, error.
-Cache hits are passed through here with the cached_result already populated.
 """
 import time
 
 from internal_bot.bot.services.formatter import format_structured_response
-from internal_bot.bot.services.formatter import normalize_cached_response
 from internal_bot.bot.state import GraphState
 from internal_bot.bot import progress
 
@@ -19,24 +17,15 @@ def run(state: GraphState) -> dict:
 	if state.get("_emit_progress"):
 		progress.emit(state, node_name, "Preparing response")
 
-	# If this is a cache hit, the cached_result is the response
-	if state.get("cache_hit") and state.get("cached_result"):
-		response = normalize_cached_response(state["cached_result"], state)
-		# Re-attach debug fields if requested
-		if state.get("debug"):
-			response["debug"] = {
-				"normalized_question": state.get("normalized_question"),
-				"discovered_entities": state.get("discovered_doctypes", []),
-				"generated_intent": None,
-				"compiled_sql": None,
-				"retries": 0,
-				"timing": state.get("timing", {}),
-				"cache_hit": True,
-				"provider": state.get("llm_provider"),
-				"model": state.get("llm_model"),
-				"node_trace": list(state.get("node_trace") or []) + [node_name],
-			}
-		formatted = response
+	# No matching DocTypes were found — tell the user immediately
+	if not state.get("discovered_doctypes") and state.get("intent") == "query":
+		formatted = {
+			"status": "clarification_needed",
+			"question": (
+				"I couldn't find any relevant data for your question. "
+				"Could you rephrase it or be more specific about what you're looking for?"
+			),
+		}
 	else:
 		formatted = format_structured_response(state)
 

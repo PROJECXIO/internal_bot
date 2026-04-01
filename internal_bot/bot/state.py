@@ -29,10 +29,6 @@ class GraphState(TypedDict, total=False):
     discovered_doctypes: list   # ["Sales Invoice", "Customer", ...]
     schema_context: str         # Markdown-formatted schema for LLM prompt
 
-    # ── Node 8: Cache Check (runs before query planning) ────────────
-    cache_hit: bool
-    cached_result: Optional[dict]
-
     # ── Node: Query Planner (replaces sql_generator + validator + executor) ──
     generated_intent: Optional[dict]    # raw JSON intent from LLM (for audit logging)
     validated_intent: Optional[dict]    # intent after permission re-check

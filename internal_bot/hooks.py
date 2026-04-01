@@ -148,11 +148,11 @@ after_install = "internal_bot.patches.v0_0_1.create_default_settings.execute"
 # Scheduled Tasks
 # ---------------
 
-scheduler_events = {
-	"daily": [
-		"internal_bot.bot.services.cache_service.purge_expired_cache"
-	],
-}
+scheduler_events = {}
+
+fixtures = [
+	{"dt": "Role", "filters": [["role_name", "in", ["AI User"]]]},
+]
 
 # Testing
 # -------

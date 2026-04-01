@@ -157,6 +157,11 @@
    "role": "System Manager",
    "share": 1,
    "write": 1
+  },
+  {
+   "read": 1,
+   "write": 1,
+   "role": "AI User"
   }
  ],
  "sort_field": "modified",

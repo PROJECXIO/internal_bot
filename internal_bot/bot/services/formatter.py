@@ -101,48 +101,13 @@ def format_structured_response(state: "GraphState") -> dict:
 			"compiled_sql": state.get("compiled_sql"),
 			"retries": state.get("query_generation_attempts", 0),
 			"timing": state.get("timing", {}),
-			"cache_hit": state.get("cache_hit", False),
-			"provider": state.get("llm_provider"),
+"provider": state.get("llm_provider"),
 			"model": state.get("llm_model"),
 			"node_trace": state.get("node_trace", []),
 			"response_type": response.get("response_type"),
 			"visualization_preference": preference if intent == "query" else "auto",
 		}
 
-	return response
-
-
-def normalize_cached_response(cached_result: dict, state: "GraphState") -> dict:
-	"""Upgrade cached success payloads to the current response contract."""
-	response = dict(cached_result or {})
-	if response.get("status") != "success":
-		return response
-
-	rows = _serialize_rows(response.get("rows") or [])
-	columns = response.get("columns") or (list(rows[0].keys()) if rows else [])
-	title = response.get("title") or _make_title(state.get("normalized_question") or state.get("raw_message", ""))
-	preference = _detect_visualization_preference(state.get("normalized_question") or state.get("raw_message", ""))
-	response_type, visualization, summary = _build_success_visualization(
-		rows=rows,
-		columns=columns,
-		title=title,
-		preference=preference,
-	)
-
-	response["response_type"] = response_type
-	response["visualization"] = visualization
-	response["summary"] = summary
-	response["title"] = title
-	response["columns"] = columns
-	response["rows"] = rows
-	response.setdefault(
-		"meta",
-		{
-			"confidence": _estimate_confidence(state),
-			"has_more": len(rows) >= (state.get("max_rows") or 100),
-			"returned_rows": len(rows),
-		},
-	)
 	return response
 
 

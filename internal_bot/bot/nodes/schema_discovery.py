@@ -28,6 +28,7 @@ _STOP_WORDS = {
     "list", "give", "get", "find", "fetch", "today", "yesterday",
     "last", "this", "month", "year", "week", "date", "time", "by",
     "from", "to", "with", "on", "at", "between", "latest", "recent",
+    "per", "each", "every", "day", "days", "count", "number", "num",
 }
 
 
@@ -52,6 +53,8 @@ def run(state: GraphState) -> dict:
 
     # Gate 1: discover_permitted_doctypes filters by frappe.has_permission
     discovered_rows = schema_svc.discover_permitted_doctypes(keywords, user, blocked)
+    # Re-rank by match quality so the most relevant DocType isn't cut off by the cap
+    discovered_rows = _rank_by_relevance(discovered_rows, keywords)
     discovered_names = [r["name"] for r in discovered_rows]
 
     # Enrich each discovered DocType with permission-filtered fields and links
@@ -77,6 +80,20 @@ def run(state: GraphState) -> dict:
         "discovered_doctypes": discovered_names,
         "schema_context": schema_ctx,
     })
+
+
+def _rank_by_relevance(rows: list, keywords: list) -> list:
+    """
+    Sort discovered DocTypes so the closest keyword match comes first.
+    Score = length of the longest keyword that appears in the lowercased name.
+    A longer keyword match (e.g. bigram "sales invoice") is more specific than
+    a short unigram match (e.g. "invoice"), so it ranks higher.
+    """
+    def score(row):
+        name_lower = row["name"].lower()
+        return max((len(kw) for kw in keywords if kw in name_lower), default=0)
+
+    return sorted(rows, key=score, reverse=True)
 
 
 def _extract_keywords(question: str) -> list:

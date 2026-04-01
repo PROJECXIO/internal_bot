@@ -89,7 +89,6 @@ def run_pipeline_job(
         "timing": {},
         "query_generation_attempts": 0,
         "retries": 0,
-        "cache_hit": False,
         "input_tokens": 0,
         "output_tokens": 0,
         "result_row_count": 0,

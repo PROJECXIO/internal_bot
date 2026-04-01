@@ -157,6 +157,11 @@
         </div>
       </template>
 
+      <!-- Bot: greeting -->
+      <template v-else-if="message.status === 'greeting'">
+        <p class="whitespace-pre-wrap break-words">{{ message.content }}</p>
+      </template>
+
       <!-- Bot: blocked -->
       <template v-else-if="message.status === 'blocked'">
         <span class="text-yellow-600">🔒 {{ message.reason }}</span>

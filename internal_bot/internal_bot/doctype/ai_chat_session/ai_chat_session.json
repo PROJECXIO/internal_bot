@@ -79,6 +79,11 @@
    "read": 1,
    "role": "All",
    "write": 1
+  },
+  {
+   "read": 1,
+   "write": 1,
+   "role": "AI User"
   }
  ],
  "sort_field": "modified",

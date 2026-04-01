@@ -19,7 +19,7 @@ class AIChatMessage(Document):
 	retries: DF.Int
 	role: DF.Literal["user", "assistant", "system"]
 	session: DF.Link
-	status: DF.Literal["success", "clarification_needed", "blocked", "error"]
+	status: DF.Literal["success", "clarification_needed", "blocked", "error", "greeting"]
 	structured_response: DF.LongText | None
 	user: DF.Link
 	validated_sql: DF.LongText | None

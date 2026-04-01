@@ -17,7 +17,7 @@ class AIBotAnalytics(Document):
 	retries: DF.Int
 	session: DF.Link | None
 	sql_executed: DF.LongText | None
-	status: DF.Literal["", "success", "blocked", "error"] | None
+	status: DF.Literal["", "success", "blocked", "error", "greeting", "clarification_needed"] | None
 	user: DF.Link
 	# end: auto-generated types
 	pass

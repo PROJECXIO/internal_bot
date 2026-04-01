@@ -156,8 +156,8 @@ class TestGraphIntegration(FrappeTestCase):
 			result = graph.invoke(state)
 
 		trace = result["node_trace"]
-		for expected in ["intent_parser", "memory_loader", "schema_discovery",
-		                 "cache_check", "query_planner", "result_formatter", "analytics"]:
+		for expected in ["intent_classifier", "memory_loader", "schema_discovery",
+		                 "query_planner", "result_formatter", "analytics"]:
 			self.assertIn(expected, trace, f"Expected '{expected}' in node_trace: {trace}")
 
 		# Old nodes must not appear

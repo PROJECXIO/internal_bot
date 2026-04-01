@@ -2,25 +2,23 @@
 LangGraph pipeline assembly for the Internal Bot.
 
 Graph topology:
-  intent_parser
+  intent_classifier
       ↓ (conditional)
       ├─ [greeting / blocked / clarification_needed] → result_formatter
       └─ [query] → memory_loader
                        ↓
                   schema_discovery   ← permission gates 1 & 2 applied here
-                       ↓
-                   cache_check
                        ↓ (conditional)
-                       ├─ [cache_hit]  → result_formatter
-                       └─ [cache_miss] → query_planner
-                                              ↓ (conditional, self-loop on retry)
-                                              ├─ [success]  → result_formatter
-                                              ├─ [retry]    → query_planner (up to 3x)
-                                              └─ [give_up]  → result_formatter
-                                                                    ↓
-                                                               analytics
-                                                                    ↓
-                                                                  END
+                       ├─ [no_schema] → result_formatter
+                       └─ [schema_found] → query_planner
+                       ↓ (conditional, self-loop on retry)
+                       ├─ [success]  → result_formatter
+                       ├─ [retry]    → query_planner (up to 3x)
+                       └─ [give_up]  → result_formatter
+                                             ↓
+                                        analytics
+                                             ↓
+                                           END
 
 The compiled graph is cached at the module level (safe: topology is static).
 """
@@ -28,8 +26,7 @@ from langgraph.graph import END, StateGraph
 
 from internal_bot.bot.nodes import (
     analytics_node,
-    cache_node,
-    intent_parser,
+    intent_classifier,
     memory_loader,
     query_planner,
     result_formatter,
@@ -51,8 +48,8 @@ def _route_after_intent(state: GraphState) -> str:
     return "proceed"
 
 
-def _route_after_cache(state: GraphState) -> str:
-    return "cache_hit" if state.get("cache_hit") else "cache_miss"
+def _route_after_schema(state: GraphState) -> str:
+    return "schema_found" if state.get("discovered_doctypes") else "no_schema"
 
 
 def _route_after_planning(state: GraphState) -> str:
@@ -73,20 +70,19 @@ def _build_graph():
     g = StateGraph(GraphState)
 
     # Register nodes
-    g.add_node("intent_parser", intent_parser.run)
+    g.add_node("intent_classifier", intent_classifier.run)
     g.add_node("memory_loader", memory_loader.run)
     g.add_node("schema_discovery", schema_discovery.run)
-    g.add_node("cache_check", cache_node.run)
     g.add_node("query_planner", query_planner.run)
     g.add_node("result_formatter", result_formatter.run)
     g.add_node("analytics", analytics_node.run)
 
     # Entry point
-    g.set_entry_point("intent_parser")
+    g.set_entry_point("intent_classifier")
 
-    # intent_parser → branch on intent
+    # intent_classifier → branch on intent
     g.add_conditional_edges(
-        "intent_parser",
+        "intent_classifier",
         _route_after_intent,
         {
             "proceed": "memory_loader",
@@ -94,17 +90,16 @@ def _build_graph():
         },
     )
 
-    # Linear: memory → schema → cache
+    # Linear: memory → schema
     g.add_edge("memory_loader", "schema_discovery")
-    g.add_edge("schema_discovery", "cache_check")
 
-    # cache_check → branch on cache hit/miss
+    # schema_discovery → short-circuit if no matching DocTypes found
     g.add_conditional_edges(
-        "cache_check",
-        _route_after_cache,
+        "schema_discovery",
+        _route_after_schema,
         {
-            "cache_hit": "result_formatter",
-            "cache_miss": "query_planner",
+            "schema_found": "query_planner",
+            "no_schema": "result_formatter",
         },
     )
 

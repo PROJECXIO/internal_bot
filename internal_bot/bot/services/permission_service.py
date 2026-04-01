@@ -34,6 +34,11 @@ _EXCLUDE_FIELD_TYPES = frozenset({
     "Heading", "HTML Editor",
 })
 
+# Standard Frappe system fields present on every DocType table.
+# They are NOT returned by frappe.get_meta().fields, so we add them explicitly.
+# All are readable by anyone with DocType read access.
+_STANDARD_READ_FIELDS = frozenset({"docstatus", "creation", "modified", "owner"})
+
 
 def check_doctype_read_access(doctype: str, user: str) -> bool:
     """
@@ -43,7 +48,7 @@ def check_doctype_read_access(doctype: str, user: str) -> bool:
     """
     if doctype in _ALWAYS_BLOCKED:
         return False
-    return bool(frappe.has_permission(doctype, ptype="read", user=user, raise_exception=False))
+    return bool(frappe.has_permission(doctype, ptype="read", user=user, throw=False))
 
 
 def filter_permitted_doctypes(doctypes: list[str], user: str) -> list[str]:
@@ -78,12 +83,16 @@ def get_permitted_field_names(doctype: str, user: str) -> list[str]:
         )
         accessible_permlevels.update(high_perm_records)
 
-    return [
+    result = [
         f.fieldname
         for f in meta.fields
         if f.fieldtype not in _EXCLUDE_FIELD_TYPES
         and (f.permlevel or 0) in accessible_permlevels
     ]
+    # Standard system fields are always accessible with read permission
+    result_set = set(result)
+    result.extend(f for f in _STANDARD_READ_FIELDS if f not in result_set)
+    return result
 
 
 def assert_fields_permitted(doctype: str, fieldnames: list[str], user: str) -> list[str]:

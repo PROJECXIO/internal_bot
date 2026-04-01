@@ -90,6 +90,11 @@ this_year, last_30_days
 8. joins list may be empty [].
 9. date_range may be omitted entirely.
 10. Output JSON only — no explanation, no SQL, no Markdown fences.
+11. For submittable DocTypes (Sales Invoice, Purchase Invoice, Purchase Order, \
+Sales Order, Stock Entry, Payment Entry, Journal Entry, Delivery Note, \
+Purchase Receipt, etc.) ALWAYS add ["docstatus", "=", 1] to filters to \
+include only submitted/confirmed records. The "docstatus" field is always \
+available in the schema.
 """
 
 

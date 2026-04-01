@@ -92,6 +92,14 @@ def get_doctype_fields(doctype: str, user: str | None = None) -> list[dict]:
                 "reqd": bool(f.reqd),
             }
         )
+    # Prepend standard system fields that aren't returned by meta.fields
+    result.insert(0, {
+        "fieldname": "docstatus",
+        "fieldtype": "Int",
+        "label": "Document Status (0=Draft, 1=Submitted, 2=Cancelled)",
+        "options": "",
+        "reqd": False,
+    })
     return result
 
 

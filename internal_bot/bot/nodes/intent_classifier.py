@@ -49,7 +49,7 @@ Respond in valid JSON only (no Markdown, no extra text):
 
 def run(state: GraphState) -> dict:
 	t0 = time.monotonic()
-	node_name = "intent_parser"
+	node_name = "intent_classifier"
 	if state.get("_emit_progress"):
 		progress.emit(state, node_name, "Understanding your request")
 
@@ -67,21 +67,8 @@ def run(state: GraphState) -> dict:
 				"clarification_options": [],
 			})
 
-	# Fast-path: detect simple greetings locally to save an LLM call
-	_GREETING_TOKENS = {"hi", "hello", "hey", "howdy", "greetings", "bye", "goodbye",
-		"thanks", "thank you", "cheers", "good morning", "good afternoon",
-		"good evening", "how are you", "what's up", "sup"}
-	if raw_lower.strip("!., ") in _GREETING_TOKENS or raw_lower.strip("!., ").startswith(
-		("hi ", "hello ", "hey ", "thanks ", "thank you")
-	):
-		return _update(state, node_name, t0, {
-			"intent": "greeting",
-			"intent_reason": "Hello! How can I help you today?",
-			"normalized_question": _normalize(raw),
-			"clarification_options": [],
-		})
-
-	# LLM classification
+	# Let the LLM decide greeting vs query so mixed messages like
+	# "hi tell me number of sales invoice" are not short-circuited.
 	if llm_client:
 		try:
 			response_text = llm_client.chat_completion(

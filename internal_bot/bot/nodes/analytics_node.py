@@ -5,14 +5,13 @@ Final node in the pipeline. Always runs.
 Responsibilities:
 1. Save the user message and the assistant response to AI Chat Message
 2. Trigger summary regeneration if threshold exceeded
-3. Save to AI Query Cache (on successful, non-cached queries)
-4. Write an AI Bot Analytics record
+3. Write an AI Bot Analytics record
 """
 import time
 
 import frappe
 
-from internal_bot.bot.services import analytics_service, cache_service, memory as memory_svc
+from internal_bot.bot.services import analytics_service, memory as memory_svc
 from internal_bot.bot.state import GraphState
 from internal_bot.bot import progress
 
@@ -56,7 +55,6 @@ def run(state: GraphState) -> dict:
                 discovered_entities=json.dumps(state.get("discovered_doctypes") or []),
                 generated_sql=frappe.as_json(state.get("generated_intent") or {}),
                 validated_sql=state.get("compiled_sql"),
-                cache_hit=1 if state.get("cache_hit") else 0,
                 retries=state.get("query_generation_attempts") or 0,
                 response_time_ms=round(
                     (time.monotonic() - state.get("start_time", t0)) * 1000
@@ -88,40 +86,9 @@ def run(state: GraphState) -> dict:
     else:
         assistant_msg_name = None
 
-    # ── 3. Save to cache (successful, non-cached queries only) ───────
-    has_result = bool(
-        state.get("compiled_sql") or state.get("validated_intent")
-    )
-    if (
-        status == "success"
-        and not state.get("cache_hit")
-        and has_result
-        and state.get("normalized_question")
-    ):
-        settings = state.get("_settings")
-        ttl = settings.cache_ttl_hours if settings else 24
-        try:
-            query_hash = state.get("_cache_query_hash") or cache_service.make_query_hash(
-                state["normalized_question"], user=user
-            )
-            cache_service.save_query_cache(
-                query_hash=query_hash,
-                normalized_question=state["normalized_question"],
-                sql=state.get("compiled_sql") or frappe.as_json(
-                    state.get("validated_intent") or {}
-                ),
-                result=response,
-                ttl_hours=ttl,
-                user=user,
-            )
-        except Exception:
-            pass
-
-    # ── 4. Write analytics record ────────────────────────────────────
+    # ── 3. Write analytics record ────────────────────────────────────
     event_type = "ask"
-    if state.get("cache_hit"):
-        event_type = "cache_hit"
-    elif status == "blocked":
+    if status == "blocked":
         event_type = "blocked"
     elif status == "error":
         event_type = "error"

@@ -165,10 +165,25 @@ def compile_analytics_intent(
             where_parts.append(f"{col} = %s")
             params.append(from_date)
 
-    # Row-scope condition — Gate 3: User Permissions injected here
-    row_scope = permission_service.get_row_scope_condition(primary, user)
-    if row_scope:
-        where_parts.append(f"({row_scope})")
+    # Gate 3: Row-scope — frappe.get_list() respects ALL Frappe permission mechanisms
+    # (User Permissions, if_owner, role-based restrictions, etc.).
+    # This is more reliable than build_match_conditions() which only covers User Permissions.
+    try:
+        permitted_names = [
+            r.name
+            for r in frappe.get_list(primary, fields=["name"], ignore_permissions=False, limit=0)
+        ]
+        if not permitted_names:
+            where_parts.append("1=0")
+        else:
+            placeholders = ", ".join(["%s"] * len(permitted_names))
+            where_parts.append(f"`tab{primary}`.`name` IN ({placeholders})")
+            params.extend(permitted_names)
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(),
+            "query_compiler: row-scope permission check failed",
+        )
 
     if where_parts:
         sql += "\nWHERE " + "\n  AND ".join(where_parts)

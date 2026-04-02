@@ -69,6 +69,16 @@ def run(state: GraphState) -> dict:
     discovered_rows = schema_svc.discover_permitted_doctypes(keywords, user, blocked)
     # Re-rank by match quality so the most relevant DocType isn't cut off by the cap
     discovered_rows = _rank_by_relevance(discovered_rows, keywords)
+
+    # If a keyword exactly matches a DocType name (case-insensitive), narrow to
+    # just that one — no need for clarification.  Check bigrams first (longer =
+    # more specific) because keywords list has unigrams then bigrams.
+    discovered_by_lower = {r["name"].lower(): r for r in discovered_rows}
+    for kw in reversed(keywords):
+        if kw in discovered_by_lower:
+            discovered_rows = [discovered_by_lower[kw]]
+            break
+
     discovered_names = [r["name"] for r in discovered_rows]
     trace.detail(state, "Discovered doctypes", discovered_names[:5])
 

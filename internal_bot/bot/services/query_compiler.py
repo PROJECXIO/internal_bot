@@ -13,6 +13,7 @@ Key invariants:
 - ignore_permissions=True must never appear in this module.
 """
 import datetime
+import re
 
 import frappe
 import frappe.utils
@@ -20,6 +21,7 @@ import frappe.utils
 from internal_bot.bot.services import permission_service
 
 _ALLOWED_FUNCS = frozenset({"SUM", "COUNT", "AVG", "MAX", "MIN", "COUNT_DISTINCT"})
+_DATE_EXTRACT_RE = re.compile(r"^(YEAR|MONTH|DAY|WEEK|DATE)\((\w+)\)$", re.IGNORECASE)
 _ALLOWED_OPERATORS = frozenset({
     "=", "!=", ">", "<", ">=", "<=", "like", "in", "not in", "between", "is",
 })
@@ -59,17 +61,32 @@ def compile_analytics_intent(
     select_parts = []
     group_by_parts = []
     metric_aliases = []
+    dimension_aliases = []
     params: list = []
 
     # Dimensions → SELECT + GROUP BY
     for dim in intent.get("dimensions", []):
-        if dim not in permitted_fields:
-            frappe.throw(
-                f"Field '{dim}' is not accessible on '{primary}'.",
-                frappe.PermissionError,
-            )
-        select_parts.append(f"`tab{primary}`.`{dim}`")
-        group_by_parts.append(f"`tab{primary}`.`{dim}`")
+        # Support date extraction: YEAR(fieldname), MONTH(fieldname), etc.
+        date_match = _DATE_EXTRACT_RE.match(dim)
+        if date_match:
+            func, field = date_match.group(1).upper(), date_match.group(2)
+            if field not in permitted_fields:
+                frappe.throw(
+                    f"Field '{field}' is not accessible on '{primary}'.",
+                    frappe.PermissionError,
+                )
+            expr = f"{func}(`tab{primary}`.`{field}`)"
+            select_parts.append(f"{expr} AS `{dim}`")
+            group_by_parts.append(expr)
+            dimension_aliases.append(dim)
+        else:
+            if dim not in permitted_fields:
+                frappe.throw(
+                    f"Field '{dim}' is not accessible on '{primary}'.",
+                    frappe.PermissionError,
+                )
+            select_parts.append(f"`tab{primary}`.`{dim}`")
+            group_by_parts.append(f"`tab{primary}`.`{dim}`")
 
     # Metrics → SELECT
     for metric in intent.get("metrics", []):
@@ -203,7 +220,7 @@ def compile_analytics_intent(
     # ORDER BY (validated — only permitted fields or metric aliases)
     order_by = intent.get("order_by")
     if order_by:
-        order_by = _validate_order_by(order_by, permitted_fields, metric_aliases)
+        order_by = _validate_order_by(order_by, permitted_fields, metric_aliases + dimension_aliases)
     if order_by:
         sql += f"\nORDER BY {order_by}"
 

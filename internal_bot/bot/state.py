@@ -48,7 +48,8 @@ class GraphState(TypedDict, total=False):
     response_type: str          # "metric_card" | "bar_chart" | "pie_chart" | "table" | "empty"
     visualization: Optional[dict]
     summary: str
-    visualization_preference: str  # "auto" | "card" | "bar" | "pie"
+    visualization_preference: str  # "auto" | "card" | "bar" | "pie" | "text"
+    answer_prefix: str             # friendly intro sentence, e.g. "Here's what I found:"
 
     # ── Per-request injected objects (must be in schema for LangGraph to preserve) ──
     _llm_client: Any   # LLMClient instance, injected in chat.py

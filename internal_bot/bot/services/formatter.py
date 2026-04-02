@@ -69,7 +69,7 @@ def format_structured_response(state: "GraphState") -> dict:
 		rows = _serialize_rows(state.get("query_result_rows") or [])
 		columns = list(rows[0].keys()) if rows else []
 		title = _make_title(state.get("normalized_question") or state.get("raw_message", ""))
-		preference = _detect_visualization_preference(state.get("normalized_question") or state.get("raw_message", ""))
+		preference = state.get("visualization_preference") or "auto"
 		response_type, visualization, summary = _build_success_visualization(
 			rows=rows,
 			columns=columns,
@@ -81,6 +81,7 @@ def format_structured_response(state: "GraphState") -> dict:
 			"status": "success",
 			"response_type": response_type,
 			"visualization": visualization,
+			"answer_prefix": state.get("answer_prefix") or "",
 			"summary": summary,
 			"title": title,
 			"columns": columns,
@@ -150,26 +151,16 @@ def _serialize_rows(rows: list[dict]) -> list[dict]:
 	return result
 
 
-def _detect_visualization_preference(question: str) -> str:
-	text = (question or "").strip().lower()
-	if not text:
-		return "auto"
-	if "pie chart" in text or "pie graph" in text:
-		return "pie"
-	if "bar chart" in text or "bar graph" in text:
-		return "bar"
-	if "card" in text or "summary card" in text:
-		return "card"
-	if "chart" in text or "graph" in text:
-		return "bar"
-	if "summary" in text or "single value" in text or "metric" in text or "kpi" in text:
-		return "card"
-	return "auto"
-
 
 def _build_success_visualization(rows: list[dict], columns: list[str], title: str, preference: str) -> tuple[str, dict | None, str]:
 	if not rows:
 		return "empty", None, "No results found."
+
+	if preference == "text":
+		plain_summary = _build_plain_summary(rows, columns)
+		if plain_summary:
+			return "plain_text", None, plain_summary
+		return "table", None, _summarize_table(rows, columns)
 
 	plain_answer = _build_plain_answer(rows, columns)
 	if plain_answer:

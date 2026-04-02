@@ -104,6 +104,15 @@ mentioned, omit date_range entirely.
 14. Do NOT add dimensions unless the user explicitly asks for a breakdown or \
 grouping (e.g. "by customer", "per month", "grouped by"). For a plain \
 total or count with no grouping requested, leave dimensions as [].
+15. When the question starts with "total" or "count" followed by a DocType name \
+(e.g. "total sales invoice", "count purchase orders"), ALWAYS use analytics \
+mode. "Total" means the user wants an aggregate number, not a list of records. \
+Use COUNT(*) if the question does not specify a numeric field, or SUM(field) \
+if a specific amount field is implied.
+16. For time-based grouping ("per year", "per month", "per day", "per week"), \
+use date extraction functions in dimensions: YEAR(fieldname), MONTH(fieldname), \
+DAY(fieldname), DATE(fieldname), WEEK(fieldname). The inner field must be a \
+valid date field from the schema (e.g. "per year" → "YEAR(posting_date)").
 """
 
 

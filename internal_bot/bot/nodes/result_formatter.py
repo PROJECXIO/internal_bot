@@ -48,9 +48,10 @@ def run(state: GraphState) -> dict:
 			"formatted_response": formatted,
 			"response_type": formatted.get("response_type"),
 			"visualization": formatted.get("visualization"),
-				"summary": formatted.get("summary"),
-				"visualization_preference": formatted.get("debug", {}).get("visualization_preference"),
-			},
+			"summary": formatted.get("summary"),
+			"answer_prefix": formatted.get("answer_prefix", ""),
+			"visualization_preference": formatted.get("debug", {}).get("visualization_preference"),
+		},
 			log_t0,
 		)
 

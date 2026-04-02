@@ -78,6 +78,15 @@ def run(state: GraphState) -> dict:
     schema_context = state.get("schema_context") or ""
     discovered = state.get("discovered_doctypes") or []
 
+    # Short-circuit: if the user selected a DocType from the options AND the
+    # question has no pending period placeholder, go straight to query_planner.
+    raw = (state.get("raw_message") or "").strip()
+    discovered_lower = {dt.lower() for dt in discovered}
+    _PERIOD_PLACEHOLDERS = ("for a period", "for some period", "during a period", "for the period")
+    has_period_placeholder = any(p in question.lower() for p in _PERIOD_PLACEHOLDERS)
+    if raw.lower() in discovered_lower and not has_period_placeholder:
+        return _update(state, node_name, t0, {"ready_to_query": True})
+
     # Build conversation history context
     history_lines = []
     for msg in (state.get("chat_history") or [])[-6:]:

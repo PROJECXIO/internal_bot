@@ -36,6 +36,7 @@ from internal_bot.bot.nodes import (
     query_planner,
     result_formatter,
     schema_discovery,
+    visualization_planner,
 )
 from internal_bot.bot.state import GraphState
 from internal_bot.bot import trace
@@ -56,11 +57,19 @@ def _route_after_intent(state: GraphState) -> str:
     return "proceed"
 
 
+_PERIOD_PLACEHOLDERS = ("for a period", "for some period", "during a period", "for the period")
+
+
 def _route_after_schema(state: GraphState) -> str:
     discovered = state.get("discovered_doctypes") or []
     if not discovered:
         return "no_schema"
     if len(discovered) > 1:
+        return "needs_clarification"
+    # Single DocType resolved, but check if the question has a vague period
+    # placeholder that needs clarification before querying.
+    question = (state.get("normalized_question") or "").lower()
+    if any(p in question for p in _PERIOD_PLACEHOLDERS):
         return "needs_clarification"
     return "schema_found"
 
@@ -96,6 +105,7 @@ def _build_graph():
     g.add_node("clarification_planner", clarification_planner.run)
     g.add_node("query_planner", query_planner.run)
     g.add_node("result_formatter", result_formatter.run)
+    g.add_node("visualization_planner", visualization_planner.run)
     g.add_node("analytics", analytics_node.run)
 
     # Entry point: load memory first so intent_classifier has conversation context
@@ -140,11 +150,13 @@ def _build_graph():
         "query_planner",
         _route_after_planning,
         {
-            "success": "result_formatter",
+            "success": "visualization_planner",
             "retry": "query_planner",
             "give_up": "result_formatter",
         },
     )
+
+    g.add_edge("visualization_planner", "result_formatter")
 
     # All paths converge at result_formatter → analytics → END
     g.add_edge("result_formatter", "analytics")

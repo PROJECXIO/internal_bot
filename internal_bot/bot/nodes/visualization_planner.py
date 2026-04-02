@@ -1,0 +1,153 @@
+"""
+Node: Visualization Planner
+
+Runs after query_planner succeeds (has result rows).
+Uses the LLM to:
+1. Choose the best visualization type for the data.
+2. Generate a short, friendly intro sentence shown above the result.
+
+Sets in state:
+  visualization_preference  — "card" | "bar" | "pie" | "text" | "auto"
+  answer_prefix             — e.g. "Here's the breakdown you asked for:"
+"""
+import json
+import re
+import time
+
+import frappe
+
+from internal_bot.bot.state import GraphState
+from internal_bot.bot import progress, trace
+
+_VALID_PREFERENCES = {"card", "bar", "pie", "text", "auto"}
+
+_SYSTEM_PROMPT = """\
+You are a data presentation assistant for an ERP chatbot.
+Given a user question and SQL result shape, output ONLY valid JSON — no markdown:
+{"visualization": "bar", "prefix": "Here's the breakdown:"}
+
+visualization choices:
+- "card"  — 1 row, 1 numeric value (a single KPI/metric)
+- "bar"   — comparing values across categories (rankings, totals by group)
+- "pie"   — part-of-whole, 2–8 categories, all positive, share/distribution question
+- "text"  — factual lookup, large table, or when no chart fits
+- "auto"  — genuinely uncertain; let the system decide
+
+prefix: one short friendly sentence shown above the result.
+For "text" answers use something like "Here's what I found:" or "I found your answer:".
+For charts/cards use something like "Here's the breakdown:" or "Here are the numbers:".\
+"""
+
+
+def run(state: GraphState) -> dict:
+    t0 = time.monotonic()
+    node_name = "visualization_planner"
+    log_t0 = trace.node_start(state, node_name)
+    if state.get("_emit_progress"):
+        progress.emit(state, node_name, "Choosing visualization")
+
+    llm_client = state.get("_llm_client")
+    if not llm_client:
+        return _update(state, node_name, t0, {
+            "visualization_preference": "auto",
+            "answer_prefix": "",
+        }, log_t0)
+
+    rows = state.get("query_result_rows") or []
+    columns = list(rows[0].keys()) if rows else []
+    question = state.get("normalized_question") or state.get("raw_message", "")
+
+    user_content = (
+        f"Question: {question}\n"
+        f"Columns: {columns}\n"
+        f"Row count: {len(rows)}\n"
+        f"Sample (first 3 rows): {_safe_sample(rows, 3)}"
+    )
+
+    messages = [
+        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "user", "content": user_content},
+    ]
+
+    try:
+        raw = llm_client.chat_completion(messages, temperature=0.0, max_tokens=150)
+        input_tokens = (state.get("input_tokens") or 0) + (
+            getattr(llm_client, "last_input_tokens", 0) or 0
+        )
+        output_tokens = (state.get("output_tokens") or 0) + (
+            getattr(llm_client, "last_output_tokens", 0) or 0
+        )
+        result = _parse_response(raw)
+        trace.detail(state, "Viz choice", result.get("visualization"))
+        trace.detail(state, "Answer prefix", result.get("prefix"))
+    except Exception as exc:
+        frappe.log_error(str(exc), "VisualizationPlanner LLM error")
+        return _update(state, node_name, t0, {
+            "visualization_preference": "auto",
+            "answer_prefix": "",
+            "input_tokens": (state.get("input_tokens") or 0) + (
+                getattr(llm_client, "last_input_tokens", 0) or 0
+            ),
+            "output_tokens": (state.get("output_tokens") or 0) + (
+                getattr(llm_client, "last_output_tokens", 0) or 0
+            ),
+            "llm_provider": getattr(llm_client, "provider", ""),
+            "llm_model": getattr(llm_client, "model", ""),
+        }, log_t0)
+
+    visualization = result.get("visualization") or "auto"
+    if visualization not in _VALID_PREFERENCES:
+        visualization = "auto"
+
+    return _update(state, node_name, t0, {
+        "visualization_preference": visualization,
+        "answer_prefix": result.get("prefix") or "",
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "llm_provider": getattr(llm_client, "provider", ""),
+        "llm_model": getattr(llm_client, "model", ""),
+    }, log_t0)
+
+
+def _parse_response(raw: str) -> dict:
+    """Parse JSON from LLM response, stripping markdown fences if present."""
+    cleaned = raw.strip()
+    match = re.search(r"```(?:json)?\s*([\s\S]*?)```", cleaned, re.IGNORECASE)
+    if match:
+        cleaned = match.group(1).strip()
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        return {"visualization": "auto", "prefix": ""}
+
+
+def _safe_sample(rows: list[dict], n: int) -> list[dict]:
+    """Return first n rows with all values converted to JSON-safe types."""
+    import datetime
+    import decimal
+    import math
+
+    result = []
+    for row in rows[:n]:
+        clean = {}
+        for k, v in row.items():
+            if isinstance(v, decimal.Decimal):
+                clean[k] = float(v) if math.isfinite(float(v)) else str(v)
+            elif isinstance(v, (datetime.date, datetime.datetime)):
+                clean[k] = str(v)
+            elif v is None:
+                clean[k] = None
+            else:
+                clean[k] = v
+        result.append(clean)
+    return result
+
+
+def _update(state: GraphState, node_name: str, t0: float, updates: dict, log_t0: float) -> dict:
+    elapsed = round((time.monotonic() - t0) * 1000, 2)
+    node_trace = list(state.get("node_trace") or []) + [node_name]
+    timing = dict(state.get("timing") or {})
+    timing[node_name] = elapsed
+    from internal_bot.bot import trace as bench_trace
+    bench_trace.node_end(state, node_name, log_t0)
+    return {**updates, "node_trace": node_trace, "timing": timing}

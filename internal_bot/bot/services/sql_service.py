@@ -113,6 +113,13 @@ if a specific amount field is implied.
 use date extraction functions in dimensions: YEAR(fieldname), MONTH(fieldname), \
 DAY(fieldname), DATE(fieldname), WEEK(fieldname). The inner field must be a \
 valid date field from the schema (e.g. "per year" → "YEAR(posting_date)").
+17. NEVER include SQL table names, backticks, or SQL expressions like \
+`tabSales Invoice`.grand_total in fields, dimensions, filters, or date_range.field. \
+Use plain field names only, like "grand_total", "item_code", or "DATE(posting_date)".
+18. For ERPNext child tables (like Sales Invoice Item), if you need line-item data, \
+add a join with {"child_doctype": "...", "parent_link_field": "parent", "join_type": "LEFT"}.
+19. Child-table link fields "parent", "parenttype", and "parentfield" are valid even \
+if they are not shown in the schema table.
 """
 
 
@@ -123,6 +130,8 @@ def generate_query_intent(
     llm_client: "LLMClient",
     attempt: int = 0,
     previous_error: str | None = None,
+    trace_metadata: dict | None = None,
+    trace_tags: list[str] | None = None,
 ) -> dict:
     """
     Call the LLM and return a validated JSON query intent dict.
@@ -157,7 +166,11 @@ def generate_query_intent(
         {"role": "user", "content": "\n".join(user_parts)},
     ]
 
-    raw = llm_client.chat_completion(messages)
+    raw = llm_client.chat_completion(
+        messages,
+        trace_metadata=trace_metadata,
+        trace_tags=trace_tags,
+    )
     return _parse_intent(raw)
 
 

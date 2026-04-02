@@ -107,6 +107,7 @@ export default {
       _pendingJobId: null,
       // Polling fallback timer (in case socket events don't arrive)
       _pollTimer: null,
+      debugEnabled: false,
     };
   },
 
@@ -137,6 +138,7 @@ export default {
       const count = this.activeSession.total_messages || 0;
       return `${count} message${count === 1 ? "" : "s"} in this conversation`;
     },
+
   },
 
   methods: {
@@ -259,6 +261,7 @@ export default {
     async initializeSession() {
       this.sessionLoading = true;
       try {
+        await this.loadDebugSettings();
         const storedSessionId = window.localStorage.getItem("internal-bot-session-id");
         try {
           await this.loadSession(storedSessionId);
@@ -279,6 +282,7 @@ export default {
         visualization: payload.visualization || null,
         answerPrefix: payload.answer_prefix || "",
         summary: payload.summary || "",
+        markdown: payload.markdown || "",
         title: payload.title || "",
         columns: payload.columns || [],
         rows: payload.rows || [],
@@ -287,7 +291,19 @@ export default {
         reason: payload.reason || "",
         content: payload.message || payload.content || "",
         meta: payload.meta || {},
+        debug: payload.debug || null,
       };
+    },
+
+    async loadDebugSettings() {
+      try {
+        const res = await this.$call(
+          "internal_bot.internal_bot.doctype.ai_provider_settings.ai_provider_settings.get_chat_debug_settings"
+        );
+        this.debugEnabled = Boolean(res?.enable_debug_context_window);
+      } catch {
+        this.debugEnabled = false;
+      }
     },
 
     async refreshSessions() {
@@ -374,7 +390,7 @@ export default {
         const queued = await this.$call("internal_bot.api.chat.ask_async", {
           message: text,
           session_id: this.currentSessionId || null,
-          debug: false,
+          debug: this.debugEnabled,
         });
 
         // Update session_id immediately so socket events are matched correctly

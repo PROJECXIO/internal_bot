@@ -16,7 +16,11 @@ Graph topology:
                        │                              └─ [ask]   → result_formatter
                        └─ [schema_found]         → query_planner
                                                        ↓ (conditional, self-loop on retry)
-                                                       ├─ [success]  → result_formatter
+                                                       ├─ [success]  → visualization_planner
+                                                       │                  ↓
+                                                       │             answer_composer
+                                                       │                  ↓
+                                                       │               analytics
                                                        ├─ [retry]    → query_planner (up to 3x)
                                                        └─ [give_up]  → result_formatter
                                                                              ↓
@@ -29,6 +33,7 @@ The compiled graph is cached at the module level (safe: topology is static).
 from langgraph.graph import END, StateGraph
 
 from internal_bot.bot.nodes import (
+    answer_composer,
     analytics_node,
     clarification_planner,
     intent_classifier,
@@ -63,24 +68,32 @@ _PERIOD_PLACEHOLDERS = ("for a period", "for some period", "during a period", "f
 def _route_after_schema(state: GraphState) -> str:
     discovered = state.get("discovered_doctypes") or []
     if not discovered:
+        trace.route(state, "result_formatter")
         return "no_schema"
     if len(discovered) > 1:
+        trace.route(state, "clarification_planner")
         return "needs_clarification"
     # Single DocType resolved, but check if the question has a vague period
     # placeholder that needs clarification before querying.
     question = (state.get("normalized_question") or "").lower()
     if any(p in question for p in _PERIOD_PLACEHOLDERS):
+        trace.route(state, "clarification_planner")
         return "needs_clarification"
+    trace.route(state, "query_planner")
     return "schema_found"
 
 
 def _route_after_clarification(state: GraphState) -> str:
-    return "ready" if state.get("ready_to_query") else "ask"
+    if state.get("ready_to_query"):
+        trace.route(state, "query_planner")
+        return "ready"
+    trace.route(state, "result_formatter")
+    return "ask"
 
 
 def _route_after_planning(state: GraphState) -> str:
     if state.get("query_is_valid"):
-        trace.route(state, "result_formatter")
+        trace.route(state, "visualization_planner")
         return "success"
     attempts = state.get("query_generation_attempts") or 0
     if attempts < _MAX_RETRIES:
@@ -104,8 +117,9 @@ def _build_graph():
     g.add_node("schema_discovery", schema_discovery.run)
     g.add_node("clarification_planner", clarification_planner.run)
     g.add_node("query_planner", query_planner.run)
-    g.add_node("result_formatter", result_formatter.run)
     g.add_node("visualization_planner", visualization_planner.run)
+    g.add_node("answer_composer", answer_composer.run)
+    g.add_node("result_formatter", result_formatter.run)
     g.add_node("analytics", analytics_node.run)
 
     # Entry point: load memory first so intent_classifier has conversation context
@@ -156,13 +170,14 @@ def _build_graph():
         },
     )
 
-    g.add_edge("visualization_planner", "result_formatter")
+    g.add_edge("visualization_planner", "answer_composer")
+    g.add_edge("answer_composer", "analytics")
 
-    # All paths converge at result_formatter → analytics → END
+    # Non-success paths converge at result_formatter → analytics → END
     g.add_edge("result_formatter", "analytics")
     g.add_edge("analytics", END)
 
-    return g.compile()
+    return g.compile(name="internal_bot_graph")
 
 
 # ──────────────────────────────────────────────────────────────────

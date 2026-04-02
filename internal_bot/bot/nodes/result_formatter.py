@@ -24,6 +24,7 @@ def run(state: GraphState) -> dict:
 			"status": "clarification_needed",
 			"question": state["clarification_question"],
 			"options": state.get("clarification_options") or [],
+			"markdown": state["clarification_question"],
 		}
 
 	# No matching DocTypes were found — tell the user immediately
@@ -31,6 +32,10 @@ def run(state: GraphState) -> dict:
 		formatted = {
 			"status": "clarification_needed",
 			"question": (
+				"I couldn't find any relevant data for your question. "
+				"Could you rephrase it or be more specific about what you're looking for?"
+			),
+			"markdown": (
 				"I couldn't find any relevant data for your question. "
 				"Could you rephrase it or be more specific about what you're looking for?"
 			),
@@ -50,10 +55,11 @@ def run(state: GraphState) -> dict:
 			"visualization": formatted.get("visualization"),
 			"summary": formatted.get("summary"),
 			"answer_prefix": formatted.get("answer_prefix", ""),
+			"answer_markdown": formatted.get("markdown", ""),
 			"visualization_preference": formatted.get("debug", {}).get("visualization_preference"),
 		},
-			log_t0,
-		)
+		log_t0,
+	)
 
 
 def _update(state: GraphState, node_name: str, t0: float, updates: dict, log_t0: float) -> dict:

@@ -59,7 +59,7 @@ def run(state: GraphState) -> dict:
     keywords = _extract_keywords(question)
     trace.detail(state, "Keywords", keywords)
 
-    if not keywords:
+    if not keywords and not state.get("follow_up_to_previous_result"):
         return _update(state, node_name, t0, {
             "discovered_doctypes": [],
             "schema_context": "",
@@ -69,6 +69,17 @@ def run(state: GraphState) -> dict:
     discovered_rows = schema_svc.discover_permitted_doctypes(keywords, user, blocked)
     # Re-rank by match quality so the most relevant DocType isn't cut off by the cap
     discovered_rows = _rank_by_relevance(discovered_rows, keywords)
+    previous_doctypes = set(state.get("last_discovered_doctypes") or [])
+
+    if state.get("follow_up_to_previous_result") and previous_doctypes:
+        matching_previous = [row for row in discovered_rows if row["name"] in previous_doctypes]
+        if matching_previous:
+            discovered_rows = matching_previous
+            trace.detail(state, "Preferring previous doctypes", [row["name"] for row in discovered_rows])
+
+    if not discovered_rows and state.get("follow_up_to_previous_result"):
+        discovered_rows = [{"name": name} for name in previous_doctypes]
+        trace.detail(state, "Reusing previous doctypes", [row["name"] for row in discovered_rows])
 
     # If a keyword exactly matches a DocType name (case-insensitive), narrow to
     # just that one — no need for clarification.  Check bigrams first (longer =

@@ -21,10 +21,11 @@ import frappe.utils
 from internal_bot.bot.services import permission_service
 
 _ALLOWED_FUNCS = frozenset({"SUM", "COUNT", "AVG", "MAX", "MIN", "COUNT_DISTINCT"})
-_DATE_EXTRACT_RE = re.compile(r"^(YEAR|MONTH|DAY|WEEK|DATE)\((\w+)\)$", re.IGNORECASE)
+_DATE_EXTRACT_RE = re.compile(r"^(YEAR|MONTH|DAY|WEEK|DATE)\((.+)\)$", re.IGNORECASE)
 _ALLOWED_OPERATORS = frozenset({
     "=", "!=", ">", "<", ">=", "<=", "like", "in", "not in", "between", "is",
 })
+_STANDARD_CHILD_FIELDS = {"parent", "parenttype", "parentfield", "idx"}
 
 
 def compile_analytics_intent(
@@ -57,6 +58,7 @@ def compile_analytics_intent(
     # Gate 2: get permitted fields for the primary DocType
     permitted_fields = set(permission_service.get_permitted_field_names(primary, user))
     permitted_fields.add("name")  # primary key always accessible
+    join_field_permissions = _get_join_field_permissions(intent.get("joins", []), user)
 
     select_parts = []
     group_by_parts = []
@@ -69,24 +71,21 @@ def compile_analytics_intent(
         # Support date extraction: YEAR(fieldname), MONTH(fieldname), etc.
         date_match = _DATE_EXTRACT_RE.match(dim)
         if date_match:
-            func, field = date_match.group(1).upper(), date_match.group(2)
-            if field not in permitted_fields:
-                frappe.throw(
-                    f"Field '{field}' is not accessible on '{primary}'.",
-                    frappe.PermissionError,
-                )
-            expr = f"{func}(`tab{primary}`.`{field}`)"
+            func, field = date_match.group(1).upper(), date_match.group(2).strip()
+            field_expr, _ = _resolve_field_reference(
+                field, primary, permitted_fields, join_field_permissions
+            )
+            expr = f"{func}({field_expr})"
             select_parts.append(f"{expr} AS `{dim}`")
             group_by_parts.append(expr)
             dimension_aliases.append(dim)
         else:
-            if dim not in permitted_fields:
-                frappe.throw(
-                    f"Field '{dim}' is not accessible on '{primary}'.",
-                    frappe.PermissionError,
-                )
-            select_parts.append(f"`tab{primary}`.`{dim}`")
-            group_by_parts.append(f"`tab{primary}`.`{dim}`")
+            dim_expr, dim_alias = _resolve_field_reference(
+                dim, primary, permitted_fields, join_field_permissions
+            )
+            select_parts.append(f"{dim_expr} AS `{dim_alias}`")
+            group_by_parts.append(dim_expr)
+            dimension_aliases.append(dim_alias)
 
     # Metrics → SELECT
     for metric in intent.get("metrics", []):
@@ -98,25 +97,20 @@ def compile_analytics_intent(
             raise ValueError(f"Unsupported aggregate function: '{func}'")
 
         if func == "COUNT_DISTINCT":
-            if field != "*" and field not in permitted_fields:
-                frappe.throw(
-                    f"Field '{field}' is not accessible on '{primary}'.",
-                    frappe.PermissionError,
+            if field == "*":
+                expr = "COUNT(DISTINCT *)"
+            else:
+                field_expr, _ = _resolve_field_reference(
+                    field, primary, permitted_fields, join_field_permissions
                 )
-            expr = (
-                f"COUNT(DISTINCT `tab{primary}`.`{field}`)"
-                if field != "*"
-                else "COUNT(DISTINCT *)"
-            )
+                expr = f"COUNT(DISTINCT {field_expr})"
         elif func == "COUNT" and field == "*":
             expr = "COUNT(*)"
         else:
-            if field not in permitted_fields:
-                frappe.throw(
-                    f"Field '{field}' is not accessible on '{primary}'.",
-                    frappe.PermissionError,
-                )
-            expr = f"{func}(`tab{primary}`.`{field}`)"
+            field_expr, _ = _resolve_field_reference(
+                field, primary, permitted_fields, join_field_permissions
+            )
+            expr = f"{func}({field_expr})"
 
         select_parts.append(f"{expr} AS `{alias}`")
         metric_aliases.append(alias)
@@ -146,12 +140,9 @@ def compile_analytics_intent(
         fieldname, op, value = filt[0], filt[1], filt[2]
         if op.lower() not in _ALLOWED_OPERATORS:
             raise ValueError(f"Unsupported filter operator: '{op}'")
-        if fieldname not in permitted_fields:
-            frappe.throw(
-                f"Field '{fieldname}' is not accessible on '{primary}'.",
-                frappe.PermissionError,
-            )
-        col = f"`tab{primary}`.`{fieldname}`"
+        col, _ = _resolve_field_reference(
+            fieldname, primary, permitted_fields, join_field_permissions
+        )
         if op.lower() in ("in", "not in"):
             values_list = value if isinstance(value, (list, tuple)) else [value]
             placeholders = ", ".join(["%s"] * len(values_list))
@@ -176,13 +167,10 @@ def compile_analytics_intent(
     date_range = intent.get("date_range")
     if date_range:
         dr_field = date_range["field"]
-        if dr_field not in permitted_fields:
-            frappe.throw(
-                f"Field '{dr_field}' is not accessible on '{primary}'.",
-                frappe.PermissionError,
-            )
         from_date, to_date = _resolve_date_preset(date_range)
-        col = f"`tab{primary}`.`{dr_field}`"
+        col, _ = _resolve_field_reference(
+            dr_field, primary, permitted_fields, join_field_permissions
+        )
         if from_date and to_date:
             where_parts.append(f"{col} BETWEEN %s AND %s")
             params.extend([from_date, to_date])
@@ -243,8 +231,7 @@ def _validate_join(join: dict, primary_doctype: str) -> None:
     child_meta = frappe.get_meta(child_dt)
     if child_meta.istable:
         # Child table: verify the parent_link_field exists on the child
-        parent_field = child_meta.get_field(parent_link)
-        if not parent_field:
+        if parent_link not in _STANDARD_CHILD_FIELDS and not child_meta.get_field(parent_link):
             raise ValueError(
                 f"Field '{parent_link}' not found on child DocType '{child_dt}'."
             )
@@ -271,6 +258,80 @@ def _is_child_table(child_doctype: str) -> bool:
         return bool(frappe.get_meta(child_doctype).istable)
     except Exception:
         return False
+
+
+def _get_join_field_permissions(joins: list[dict], user: str) -> dict[str, set[str]]:
+    permissions: dict[str, set[str]] = {}
+    for join in joins or []:
+        child_dt = join["child_doctype"]
+        permitted = set(permission_service.get_permitted_field_names(child_dt, user))
+        permitted.add("name")
+        if _is_child_table(child_dt):
+            permitted.update(_STANDARD_CHILD_FIELDS)
+        permissions[child_dt] = permitted
+    return permissions
+
+
+def _resolve_field_reference(
+    raw_field: str,
+    primary_doctype: str,
+    primary_permitted_fields: set[str],
+    join_field_permissions: dict[str, set[str]],
+) -> tuple[str, str]:
+    field = (raw_field or "").strip()
+    if not field:
+        raise ValueError("Field reference cannot be empty.")
+
+    explicit_doctype, fieldname = _split_field_reference(field)
+    alias = fieldname
+
+    if explicit_doctype:
+        if explicit_doctype == primary_doctype:
+            if fieldname not in primary_permitted_fields:
+                frappe.throw(
+                    f"Field '{fieldname}' is not accessible on '{primary_doctype}'.",
+                    frappe.PermissionError,
+                )
+            return f"`tab{primary_doctype}`.`{fieldname}`", alias
+
+        permitted = join_field_permissions.get(explicit_doctype)
+        if not permitted:
+            raise ValueError(f"DocType '{explicit_doctype}' is not part of the declared joins.")
+        if fieldname not in permitted:
+            frappe.throw(
+                f"Field '{fieldname}' is not accessible on '{explicit_doctype}'.",
+                frappe.PermissionError,
+            )
+        return f"`tab{explicit_doctype}`.`{fieldname}`", alias
+
+    if fieldname in primary_permitted_fields:
+        return f"`tab{primary_doctype}`.`{fieldname}`", alias
+
+    matches = [dt for dt, permitted in join_field_permissions.items() if fieldname in permitted]
+    if len(matches) == 1:
+        return f"`tab{matches[0]}`.`{fieldname}`", alias
+    if len(matches) > 1:
+        raise ValueError(
+            f"Field '{fieldname}' is ambiguous across joined DocTypes: {', '.join(matches)}."
+        )
+
+    frappe.throw(
+        f"Field '{fieldname}' is not accessible on '{primary_doctype}' or joined DocTypes.",
+        frappe.PermissionError,
+    )
+
+
+def _split_field_reference(raw_field: str) -> tuple[str | None, str]:
+    field = raw_field.strip()
+    match = re.match(r"^`?tab([^`]+)`?\.`?([^`]+)`?$", field)
+    if match:
+        return match.group(1), match.group(2)
+
+    match = re.match(r"^([^.`]+)\.([^.`]+)$", field)
+    if match:
+        return match.group(1), match.group(2)
+
+    return None, field.strip("`")
 
 
 def _resolve_date_preset(date_range: dict) -> tuple[str | None, str | None]:

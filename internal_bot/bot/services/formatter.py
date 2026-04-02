@@ -17,40 +17,46 @@ def format_structured_response(state: "GraphState") -> dict:
 	Convert the final graph state into the API response contract.
 
 	Status values:
-	  success               — query ran and returned data
-	  clarification_needed  — intent was ambiguous
-	  blocked               — request touches restricted data
-	  error                 — SQL gen/exec failed after retries
+	  success               - query ran and returned data
+	  clarification_needed  - intent was ambiguous
+	  blocked               - request touches restricted data
+	  error                 - SQL gen/exec failed after retries
 	"""
 	intent = state.get("intent", "query")
 	debug = state.get("debug", False)
+	preference = state.get("visualization_preference") or "auto"
 
-	# ── Greeting ────────────────────────────────────────────────────
 	if intent == "greeting":
 		response = {
 			"status": "greeting",
 			"message": state.get("intent_reason", "Hello! How can I help you today?"),
+			"markdown": state.get("answer_markdown")
+			or state.get("intent_reason")
+			or "Hello! How can I help you today?",
 			"meta": {"confidence": 1.0},
 		}
 
-	# ── Clarification ──────────────────────────────────────────────
 	elif intent == "clarification_needed":
 		response = {
 			"status": "clarification_needed",
 			"question": state.get("intent_reason", "Could you clarify your question?"),
 			"options": state.get("clarification_options", []),
+			"markdown": state.get("answer_markdown")
+			or state.get("intent_reason")
+			or "Could you clarify your question?",
 			"meta": {"confidence": 0.4},
 		}
 
-	# ── Blocked ─────────────────────────────────────────────────────
 	elif intent == "blocked":
 		response = {
 			"status": "blocked",
 			"reason": state.get("intent_reason", "This request touches restricted data."),
+			"markdown": state.get("answer_markdown")
+			or state.get("intent_reason")
+			or "This request touches restricted data.",
 			"meta": {"confidence": 1.0},
 		}
 
-	# ── Query Error ─────────────────────────────────────────────────
 	elif state.get("query_execution_error") or (
 		not state.get("query_is_valid") and state.get("query_generation_attempts", 0) >= 3
 	):
@@ -58,42 +64,23 @@ def format_structured_response(state: "GraphState") -> dict:
 			state.get("query_execution_error")
 			or state.get("query_invalid_reason", "Unknown error")
 		)
+		reason = "Could not generate a valid query. Please rephrase your question."
 		response = {
 			"status": "error",
-			"reason": "Could not generate a valid query. Please rephrase your question.",
+			"reason": reason,
+			"markdown": state.get("answer_markdown") or reason,
 			"meta": {"confidence": 0.0, "error_detail": error_msg},
 		}
 
-	# ── Success ──────────────────────────────────────────────────────
 	else:
-		rows = _serialize_rows(state.get("query_result_rows") or [])
-		columns = list(rows[0].keys()) if rows else []
-		title = _make_title(state.get("normalized_question") or state.get("raw_message", ""))
-		preference = state.get("visualization_preference") or "auto"
-		response_type, visualization, summary = _build_success_visualization(
-			rows=rows,
-			columns=columns,
-			title=title,
-			preference=preference,
-		)
-
-		response = {
-			"status": "success",
-			"response_type": response_type,
-			"visualization": visualization,
-			"answer_prefix": state.get("answer_prefix") or "",
-			"summary": summary,
-			"title": title,
-			"columns": columns,
-			"rows": rows,
-			"meta": {
-				"confidence": _estimate_confidence(state),
-				"has_more": len(rows) >= (state.get("max_rows") or 100),
-				"returned_rows": len(rows),
-			},
+		response = build_success_payload(state)
+		response["status"] = "success"
+		response["meta"] = {
+			"confidence": _estimate_confidence(state),
+			"has_more": len(response["rows"]) >= (state.get("max_rows") or 100),
+			"returned_rows": len(response["rows"]),
 		}
 
-	# ── Debug extras ────────────────────────────────────────────────
 	if debug:
 		response["debug"] = {
 			"normalized_question": state.get("normalized_question"),
@@ -102,31 +89,198 @@ def format_structured_response(state: "GraphState") -> dict:
 			"compiled_sql": state.get("compiled_sql"),
 			"retries": state.get("query_generation_attempts", 0),
 			"timing": state.get("timing", {}),
-"provider": state.get("llm_provider"),
+			"provider": state.get("llm_provider"),
 			"model": state.get("llm_model"),
 			"node_trace": state.get("node_trace", []),
 			"response_type": response.get("response_type"),
 			"visualization_preference": preference if intent == "query" else "auto",
+			"cache_hit": state.get("cache_hit", False),
 		}
+		if _should_include_debug_context_window(state):
+			response["debug"]["context_window"] = _build_context_window(state)
+			response["debug"]["token_usage"] = _build_token_usage(state)
 
 	return response
 
 
-# ------------------------------------------------------------------
-# Helpers
-# ------------------------------------------------------------------
+def build_success_payload(state: "GraphState") -> dict:
+	rows = _serialize_rows(state.get("query_result_rows") or [])
+	columns = list(rows[0].keys()) if rows else []
+	title = _make_title(state.get("normalized_question") or state.get("raw_message", ""))
+	preference = state.get("visualization_preference") or "auto"
+
+	if _should_force_text_explanation(state, preference):
+		markdown = state.get("answer_markdown") or ""
+		summary = strip_markdown_to_text(markdown) or _summarize_table(rows, columns)
+		return {
+			"response_type": "plain_text",
+			"visualization": None,
+			"answer_prefix": state.get("answer_prefix") or "",
+			"summary": summary,
+			"markdown": markdown,
+			"title": title,
+			"columns": columns,
+			"rows": rows,
+		}
+
+	response_type, visualization, summary = _build_success_visualization(
+		rows=rows,
+		columns=columns,
+		title=title,
+		preference=preference,
+	)
+	return {
+		"response_type": response_type,
+		"visualization": visualization,
+		"answer_prefix": state.get("answer_prefix") or "",
+		"summary": summary,
+		"markdown": state.get("answer_markdown") or "",
+		"title": title,
+		"columns": columns,
+		"rows": rows,
+	}
+
+
+def _should_force_text_explanation(state: "GraphState", preference: str) -> bool:
+	if preference != "text":
+		return False
+	if not state.get("follow_up_to_previous_result"):
+		return False
+
+	last_response = state.get("last_assistant_response") or {}
+	return last_response.get("response_type") in {"bar_chart", "pie_chart", "metric_card", "table"}
+
+
+def normalize_cached_response(cached_response: dict, state: "GraphState | dict | None" = None) -> dict:
+	state = state or {}
+	response = dict(cached_response or {})
+	status = response.get("status") or "success"
+	response["status"] = status
+
+	if status != "success":
+		response["markdown"] = response.get("markdown") or _markdown_from_response(response)
+		return response
+
+	legacy_state = {
+		**state,
+		"query_result_rows": response.get("rows") or state.get("query_result_rows") or [],
+		"normalized_question": state.get("normalized_question")
+		or response.get("title")
+		or state.get("raw_message", ""),
+		"raw_message": state.get("raw_message")
+		or response.get("title")
+		or state.get("normalized_question", ""),
+		"answer_prefix": response.get("answer_prefix") or state.get("answer_prefix") or "",
+		"answer_markdown": response.get("markdown") or state.get("answer_markdown") or "",
+		"visualization_preference": state.get("visualization_preference") or "auto",
+		"max_rows": state.get("max_rows") or len(response.get("rows") or []),
+	}
+	payload = build_success_payload(legacy_state)
+
+	if response.get("response_type") == "table" and payload["response_type"] == "plain_text":
+		response["response_type"] = payload["response_type"]
+		response["visualization"] = payload["visualization"]
+		response["summary"] = payload["summary"]
+	elif not response.get("response_type"):
+		response["response_type"] = payload["response_type"]
+
+	if "visualization" not in response:
+		response["visualization"] = payload["visualization"]
+	if not response.get("summary"):
+		response["summary"] = payload["summary"]
+	if not response.get("title"):
+		response["title"] = payload["title"]
+	if "columns" not in response:
+		response["columns"] = payload["columns"]
+	if "rows" not in response:
+		response["rows"] = payload["rows"]
+
+	response["markdown"] = response.get("markdown") or payload.get("markdown") or ""
+	response["answer_prefix"] = response.get("answer_prefix") or payload.get("answer_prefix") or ""
+	return response
+
+
+def strip_markdown_to_text(value: str) -> str:
+	text = (value or "").strip()
+	if not text:
+		return ""
+
+	text = re.sub(r"```(?:[\w+-]+)?\s*([\s\S]*?)```", r"\1", text)
+	text = re.sub(r"`([^`]+)`", r"\1", text)
+	text = re.sub(r"!\[([^\]]*)\]\([^)]+\)", r"\1", text)
+	text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+	text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
+	text = re.sub(r"^\s*>\s?", "", text, flags=re.MULTILINE)
+	text = re.sub(r"^\s*[-*+]\s+", "", text, flags=re.MULTILINE)
+	text = re.sub(r"^\s*\d+\.\s+", "", text, flags=re.MULTILINE)
+	text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+	text = re.sub(r"\*([^*]+)\*", r"\1", text)
+	text = re.sub(r"__([^_]+)__", r"\1", text)
+	text = re.sub(r"_([^_]+)_", r"\1", text)
+	text = re.sub(r"\n{3,}", "\n\n", text)
+	return text.strip()
+
+
+def _markdown_from_response(response: dict) -> str:
+	status = response.get("status")
+	if status == "greeting":
+		return response.get("markdown") or response.get("message") or ""
+	if status == "clarification_needed":
+		return response.get("markdown") or response.get("question") or ""
+	if status in {"blocked", "error"}:
+		return response.get("markdown") or response.get("reason") or ""
+	return response.get("markdown") or ""
+
+
+def _should_include_debug_context_window(state: "GraphState") -> bool:
+	settings = state.get("_settings")
+	return bool(getattr(settings, "enable_debug_context_window", False))
+
+
+def _build_context_window(state: "GraphState") -> dict:
+	history = [
+		{
+			"role": message.get("role", ""),
+			"content": message.get("content", ""),
+		}
+		for message in (state.get("chat_history") or [])
+		if message.get("content")
+	]
+	return {
+		"history": history,
+		"memory_summary": state.get("memory_summary") or "",
+		"last_result_context": state.get("last_assistant_context_text") or "",
+		"schema_context": state.get("schema_context") or "",
+		"question_context": {
+			"raw_message": state.get("raw_message") or "",
+			"normalized_question": state.get("normalized_question") or "",
+			"follow_up_to_previous_result": bool(state.get("follow_up_to_previous_result")),
+			"last_user_question": state.get("last_user_question") or "",
+			"last_non_follow_up_user_question": state.get("last_non_follow_up_user_question") or "",
+			"discovered_doctypes": state.get("discovered_doctypes") or [],
+			"visualization_preference": state.get("visualization_preference") or "auto",
+		},
+	}
+
+
+def _build_token_usage(state: "GraphState") -> dict:
+	input_tokens = int(state.get("input_tokens") or 0)
+	output_tokens = int(state.get("output_tokens") or 0)
+	return {
+		"input_tokens": input_tokens,
+		"output_tokens": output_tokens,
+		"total_tokens": input_tokens + output_tokens,
+	}
 
 
 def _make_title(question: str) -> str:
 	if not question:
 		return "Query Result"
-	# Capitalise first char, strip trailing punctuation
 	title = question.strip().rstrip("?.")
 	return title[:80] if len(title) > 80 else title
 
 
 def _estimate_confidence(state: "GraphState") -> float:
-	"""Heuristic confidence: penalise retries."""
 	base = 0.95
 	retries = state.get("query_generation_attempts", 0)
 	base -= retries * 0.1
@@ -134,25 +288,28 @@ def _estimate_confidence(state: "GraphState") -> float:
 
 
 def _serialize_rows(rows: list[dict]) -> list[dict]:
-	"""Convert any non-JSON-serializable values (Decimal, date, etc.)."""
 	result = []
 	for row in rows:
 		clean = {}
-		for k, v in row.items():
-			if isinstance(v, decimal.Decimal):
-				clean[k] = float(v)
-			elif isinstance(v, (datetime.date, datetime.datetime)):
-				clean[k] = str(v)
-			elif v is None:
-				clean[k] = None
+		for key, value in row.items():
+			if isinstance(value, decimal.Decimal):
+				clean[key] = float(value)
+			elif isinstance(value, (datetime.date, datetime.datetime)):
+				clean[key] = str(value)
+			elif value is None:
+				clean[key] = None
 			else:
-				clean[k] = v
+				clean[key] = value
 		result.append(clean)
 	return result
 
 
-
-def _build_success_visualization(rows: list[dict], columns: list[str], title: str, preference: str) -> tuple[str, dict | None, str]:
+def _build_success_visualization(
+	rows: list[dict],
+	columns: list[str],
+	title: str,
+	preference: str,
+) -> tuple[str, dict | None, str]:
 	if not rows:
 		return "empty", None, "No results found."
 

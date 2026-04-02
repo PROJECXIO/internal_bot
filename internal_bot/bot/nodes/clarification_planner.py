@@ -16,7 +16,7 @@ import time
 import frappe
 
 from internal_bot.bot.state import GraphState
-from internal_bot.bot import progress
+from internal_bot.bot import progress, trace
 
 _SYSTEM_PROMPT = """\
 You are a data query assistant for an ERP system.
@@ -67,12 +67,13 @@ period that the user clearly intends to specify (phrases like "for a period", \
 def run(state: GraphState) -> dict:
     t0 = time.monotonic()
     node_name = "clarification_planner"
+    log_t0 = trace.node_start(state, node_name)
     if state.get("_emit_progress"):
         progress.emit(state, node_name, "Checking query details")
 
     llm_client = state.get("_llm_client")
     if not llm_client:
-        return _update(state, node_name, t0, {"ready_to_query": True})
+        return _update(state, node_name, t0, {"ready_to_query": True}, log_t0)
 
     question = state.get("normalized_question") or state.get("raw_message", "")
     schema_context = state.get("schema_context") or ""
@@ -85,7 +86,7 @@ def run(state: GraphState) -> dict:
     _PERIOD_PLACEHOLDERS = ("for a period", "for some period", "during a period", "for the period")
     has_period_placeholder = any(p in question.lower() for p in _PERIOD_PLACEHOLDERS)
     if raw.lower() in discovered_lower and not has_period_placeholder:
-        return _update(state, node_name, t0, {"ready_to_query": True})
+        return _update(state, node_name, t0, {"ready_to_query": True}, log_t0)
 
     # Build conversation history context
     history_lines = []
@@ -96,6 +97,8 @@ def run(state: GraphState) -> dict:
     user_parts = []
     if history_lines:
         user_parts.append("## Conversation History\n" + "\n".join(history_lines))
+    if state.get("last_assistant_context_text"):
+        user_parts.append("## Last Structured Result Context\n" + state["last_assistant_context_text"])
     user_parts.append(f"## Current Question\n{question}")
     if schema_context:
         user_parts.append(f"## Available Schema\n{schema_context}")
@@ -108,20 +111,63 @@ def run(state: GraphState) -> dict:
     ]
 
     try:
-        raw = llm_client.chat_completion(messages, temperature=0.0, max_tokens=200)
+        raw = llm_client.chat_completion(
+            messages,
+            temperature=0.0,
+            max_tokens=200,
+            **trace.llm_trace_context(state, node_name, "plan_clarification"),
+        )
+        input_tokens = (state.get("input_tokens") or 0) + (
+            getattr(llm_client, "last_input_tokens", 0) or 0
+        )
+        output_tokens = (state.get("output_tokens") or 0) + (
+            getattr(llm_client, "last_output_tokens", 0) or 0
+        )
         result = _parse_response(raw)
     except Exception as exc:
         frappe.log_error(str(exc), "ClarificationPlanner LLM error")
-        return _update(state, node_name, t0, {"ready_to_query": True})
+        return _update(
+            state,
+            node_name,
+            t0,
+            {
+                "ready_to_query": True,
+                "input_tokens": (state.get("input_tokens") or 0) + (
+                    getattr(llm_client, "last_input_tokens", 0) or 0
+                ),
+                "output_tokens": (state.get("output_tokens") or 0) + (
+                    getattr(llm_client, "last_output_tokens", 0) or 0
+                ),
+                "llm_provider": getattr(llm_client, "provider", ""),
+                "llm_model": getattr(llm_client, "model", ""),
+            },
+            log_t0,
+        )
 
     if result.get("ready"):
-        return _update(state, node_name, t0, {"ready_to_query": True})
+        return _update(
+            state,
+            node_name,
+            t0,
+            {
+                "ready_to_query": True,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "llm_provider": getattr(llm_client, "provider", ""),
+                "llm_model": getattr(llm_client, "model", ""),
+            },
+            log_t0,
+        )
 
     return _update(state, node_name, t0, {
         "ready_to_query": False,
         "clarification_question": result.get("question", "Could you provide more details about what you're looking for?"),
         "clarification_options": result.get("options") or [],
-    })
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "llm_provider": getattr(llm_client, "provider", ""),
+        "llm_model": getattr(llm_client, "model", ""),
+    }, log_t0)
 
 
 def _parse_response(raw: str) -> dict:
@@ -137,9 +183,11 @@ def _parse_response(raw: str) -> dict:
         return {"ready": True}
 
 
-def _update(state: GraphState, node_name: str, t0: float, updates: dict) -> dict:
+def _update(state: GraphState, node_name: str, t0: float, updates: dict, log_t0: float) -> dict:
     elapsed = round((time.monotonic() - t0) * 1000, 2)
     trace = list(state.get("node_trace") or []) + [node_name]
     timing = dict(state.get("timing") or {})
     timing[node_name] = elapsed
+    from internal_bot.bot import trace as bench_trace
+    bench_trace.node_end(state, node_name, log_t0)
     return {**updates, "node_trace": trace, "timing": timing}

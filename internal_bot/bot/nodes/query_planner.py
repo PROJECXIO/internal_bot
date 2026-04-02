@@ -65,6 +65,20 @@ def run(state: GraphState) -> dict:
             f"{m['role'].upper()}: {m['content']}" for m in history[-6:]
         )
         memory_parts.append(f"Recent messages:\n{history_text}")
+    if state.get("last_assistant_context_text"):
+        memory_parts.append(
+            "Last structured result context:\n"
+            f"{state['last_assistant_context_text']}"
+        )
+    last_assistant_response = state.get("last_assistant_response") or {}
+    if last_assistant_response and state.get("follow_up_to_previous_result"):
+        memory_parts.append(
+            "Previous structured result:\n"
+            f"Title: {last_assistant_response.get('title', '')}\n"
+            f"Summary: {last_assistant_response.get('summary', '')}\n"
+            f"Columns: {last_assistant_response.get('columns', [])}\n"
+            f"Rows: {(last_assistant_response.get('rows') or [])[:5]}"
+        )
     memory_context = "\n\n".join(memory_parts)
 
     previous_error = (
@@ -84,6 +98,7 @@ def run(state: GraphState) -> dict:
             llm_client=llm_client,
             attempt=attempt,
             previous_error=previous_error,
+            **trace.llm_trace_context(state, node_name, "generate_query_intent"),
         )
         input_tokens = (state.get("input_tokens") or 0) + (
             getattr(llm_client, "last_input_tokens", 0) or 0

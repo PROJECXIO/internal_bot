@@ -7,7 +7,9 @@ in `bench start` logs for both sync and async requests.
 from __future__ import annotations
 
 import json
+import os
 import sys
+import textwrap
 import time
 
 
@@ -33,11 +35,21 @@ def _session_id(state: dict) -> str:
     )
 
 
+def _is_truthy_env(value: str | None) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def langsmith_enabled() -> bool:
+    return _is_truthy_env(os.getenv("LANGSMITH_TRACING")) or _is_truthy_env(
+        os.getenv("LANGCHAIN_TRACING_V2")
+    )
+
+
 def _stringify(value) -> str:
     if isinstance(value, str):
         return value
     try:
-        return json.dumps(value, ensure_ascii=True)
+        return json.dumps(value, ensure_ascii=True, indent=2)
     except Exception:
         return str(value)
 
@@ -61,7 +73,7 @@ def request_complete(state: dict, response: dict | None = None) -> None:
     session_id = _session_id(state)
     total_ms = round((time.monotonic() - state.get("start_time", time.monotonic())) * 1000)
     _write(f"[{session_id}] ╔{'═' * 50}╗")
-    _write(f"[{session_id}] ║        INTERNAL BOT GRAPH REQUEST COMPLETE      ║")
+    _write(f"[{session_id}] ║        INTERNAL BOT GRAPH REQUEST COMPLETE       ║")
     _write(f"[{session_id}] ╚{'═' * 50}╝")
     _write(f"[{session_id}]   Total time: {_format_duration(total_ms)}")
     _write(f"[{session_id}]   Node trace: {(state.get('node_trace') or [])}")
@@ -99,8 +111,40 @@ def detail(state: dict, message: str, value=None) -> None:
     if value is None:
         _write(f"[{session_id}]   {message}")
         return
+
     rendered = _stringify(value)
-    _write(f"[{session_id}]   {message}: {rendered}")
+    _write_block(session_id, message, rendered)
+
+
+def _write_block(session_id: str, label: str, rendered: str) -> None:
+    rendered = (rendered or "").strip()
+    if not rendered:
+        _write(f"[{session_id}]   {label}:")
+        return
+
+    lines = []
+    for raw_line in rendered.splitlines():
+        if not raw_line:
+            lines.append("")
+            continue
+        wrapped = textwrap.wrap(
+            raw_line,
+            width=96,
+            break_long_words=False,
+            break_on_hyphens=False,
+        )
+        lines.extend(wrapped or [""])
+
+    if len(lines) == 1:
+        _write(f"[{session_id}]   {label}: {lines[0]}")
+        return
+
+    _write(f"[{session_id}]   {label}:")
+    for line in lines:
+        if line:
+            _write(f"[{session_id}]     {line}")
+        else:
+            _write(f"[{session_id}]")
 
 
 def route(state: dict, destination: str) -> None:
@@ -114,3 +158,53 @@ def retry_banner(state: dict, node_name: str, attempt: int, max_attempts: int, p
     if prev_error:
         _write(f"[{session_id}] │  Error: {prev_error[:180]}")
     _write(f"[{session_id}] └{'─' * 52}")
+
+
+def graph_invoke_config(state: dict, run_name: str) -> dict:
+    session_id = _session_id(state)
+    tags = ["internal_bot", "langgraph", "async" if state.get("_job_id") else "sync"]
+    metadata = {
+        "app": "internal_bot",
+        "session_name": state.get("session_name"),
+        "job_id": state.get("_job_id"),
+        "user": state.get("user"),
+        "debug": bool(state.get("debug")),
+    }
+    return {
+        "run_name": run_name,
+        "tags": tags,
+        "metadata": {k: v for k, v in metadata.items() if v not in (None, "")},
+        "configurable": {"thread_id": session_id},
+    }
+
+
+def llm_trace_context(state: dict, node_name: str, purpose: str) -> dict:
+    tags = ["internal_bot", "llm", f"node:{node_name}"]
+    tags.append("async" if state.get("_job_id") else "sync")
+    metadata = {
+        "app": "internal_bot",
+        "node": node_name,
+        "purpose": purpose,
+        "session_name": state.get("session_name"),
+        "job_id": state.get("_job_id"),
+        "user": state.get("user"),
+    }
+    return {
+        "trace_metadata": {k: v for k, v in metadata.items() if v not in (None, "")},
+        "trace_tags": tags,
+    }
+
+
+def flush_langsmith() -> None:
+    if not langsmith_enabled():
+        return
+
+    try:
+        from langchain_core.tracers.langchain import wait_for_all_tracers
+    except Exception:
+        return
+
+    try:
+        wait_for_all_tracers()
+    except Exception as exc:
+        _write(f"[trace] LangSmith flush failed: {exc}")

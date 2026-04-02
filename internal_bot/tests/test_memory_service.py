@@ -99,3 +99,26 @@ class TestMemoryService(FrappeTestCase):
 		self.assertEqual(msg.normalized_question, "show customers")
 		self.assertEqual(msg.retries, 1)
 		self.assertEqual(msg.response_time_ms, 350)
+
+	def test_load_chat_memory_includes_last_assistant_payload_context(self):
+		save_message(_TEST_SESSION, "user", "total grand sales invoice per day", status="success", normalized_question="total grand sales invoice per day")
+		save_message(
+			_TEST_SESSION,
+			"assistant",
+			"Returned 8 rows.",
+			status="success",
+			structured_response=frappe.as_json({
+				"status": "success",
+				"title": "Total grand sales invoice per day",
+				"summary": "Returned 8 rows.",
+				"columns": ["posting_date", "total_grand_sales"],
+				"rows": [{"posting_date": "2025-09-16", "total_grand_sales": 229000}],
+			}),
+			discovered_entities=frappe.as_json(["Sales Invoice"]),
+		)
+		frappe.db.commit()
+
+		mem = load_chat_memory(_TEST_SESSION, window_size=10)
+		self.assertEqual(mem["last_user_question"], "total grand sales invoice per day")
+		self.assertEqual(mem["last_discovered_doctypes"], ["Sales Invoice"])
+		self.assertEqual(mem["last_assistant_response"]["title"], "Total grand sales invoice per day")

@@ -68,6 +68,7 @@ class TestChatAPI(FrappeTestCase):
 			"response_type": "table",
 			"visualization": None,
 			"summary": "Returned 1 row across 1 column.",
+			"markdown": "| name |\n| --- |\n| CUST-001 |",
 			"title": "Customers",
 			"columns": ["name"],
 			"rows": [{"name": "CUST-001"}],
@@ -87,6 +88,7 @@ class TestChatAPI(FrappeTestCase):
 		self.assertEqual(response["status"], "success")
 		self.assertIn("rows", response)
 		self.assertEqual(response["rows"][0]["name"], "CUST-001")
+		self.assertEqual(response["markdown"], "| name |\n| --- |\n| CUST-001 |")
 		self.assertIn("session_id", response)
 
 	def test_response_has_meta_field(self):
@@ -95,6 +97,7 @@ class TestChatAPI(FrappeTestCase):
 			"response_type": "empty",
 			"visualization": None,
 			"summary": "No results found.",
+			"markdown": "No results found.",
 			"title": "Result",
 			"columns": [],
 			"rows": [],
@@ -113,6 +116,7 @@ class TestChatAPI(FrappeTestCase):
 
 		self.assertIn("meta", response)
 		self.assertIn("confidence", response["meta"])
+		self.assertEqual(response["markdown"], "No results found.")
 
 	def test_visual_payload_passes_through(self):
 		fake_response = {
@@ -127,6 +131,7 @@ class TestChatAPI(FrappeTestCase):
 				"show_table_toggle": True,
 			},
 			"summary": "West is highest at 1,200 total sales.",
+			"markdown": "- West leads.\n- East follows.",
 			"title": "Sales by Territory",
 			"columns": ["territory", "total_sales"],
 			"rows": [{"territory": "West", "total_sales": 1200}, {"territory": "East", "total_sales": 950}],
@@ -144,6 +149,7 @@ class TestChatAPI(FrappeTestCase):
 
 		self.assertEqual(response["response_type"], "bar_chart")
 		self.assertEqual(response["visualization"]["kind"], "bar")
+		self.assertEqual(response["markdown"], "- West leads.\n- East follows.")
 
 	def test_list_and_history_include_created_session(self):
 		session = create_session()
@@ -173,6 +179,7 @@ class TestChatAPI(FrappeTestCase):
 						"response_type": "table",
 						"title": "Customers",
 						"summary": "Returned 1 row across 1 column.",
+						"markdown": "| name |\n| --- |\n| CUST-001 |",
 						"columns": ["name"],
 						"rows": [{"name": "CUST-001"}],
 						"visualization": None,
@@ -189,3 +196,62 @@ class TestChatAPI(FrappeTestCase):
 		self.assertTrue(any(item["session_id"] == session_id for item in session_list["sessions"]))
 		self.assertEqual(history["session_id"], session_id)
 		self.assertEqual(history["messages"][1]["response_type"], "table")
+		self.assertEqual(history["messages"][1]["markdown"], "| name |\n| --- |\n| CUST-001 |")
+
+	def test_history_preserves_debug_context_payload(self):
+		session = create_session()
+		session_id = session["session_id"]
+
+		frappe.get_doc(
+			{
+				"doctype": "AI Chat Message",
+				"session": session_id,
+				"user": "Administrator",
+				"role": "assistant",
+				"status": "success",
+				"content": "Returned 1 row(s).",
+				"structured_response": frappe.as_json(
+					{
+						"status": "success",
+						"response_type": "table",
+						"title": "Customers",
+						"summary": "Returned 1 row across 1 column.",
+						"markdown": "Customers loaded.",
+						"columns": ["name"],
+						"rows": [{"name": "CUST-001"}],
+						"visualization": None,
+						"debug": {
+							"context_window": {
+								"history": [{"role": "user", "content": "show customers"}],
+								"memory_summary": "Asked for customer data.",
+								"last_result_context": "",
+								"schema_context": "## Customer",
+								"question_context": {
+									"raw_message": "show customers",
+									"normalized_question": "show customers",
+									"follow_up_to_previous_result": False,
+									"last_user_question": "",
+									"last_non_follow_up_user_question": "",
+									"discovered_doctypes": ["Customer"],
+									"visualization_preference": "auto",
+								},
+							},
+							"token_usage": {
+								"input_tokens": 11,
+								"output_tokens": 7,
+								"total_tokens": 18,
+							},
+						},
+						"meta": {"confidence": 0.9},
+					}
+				),
+			}
+		).insert(ignore_permissions=True)
+		frappe.db.commit()
+
+		history = get_session_history(session_id=session_id)
+		self.assertEqual(history["messages"][0]["debug"]["token_usage"]["total_tokens"], 18)
+		self.assertEqual(
+			history["messages"][0]["debug"]["context_window"]["schema_context"],
+			"## Customer",
+		)

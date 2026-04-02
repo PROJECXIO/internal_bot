@@ -12,6 +12,7 @@ import time
 import frappe
 
 from internal_bot.bot.services import analytics_service, memory as memory_svc
+from internal_bot.bot.services.formatter import strip_markdown_to_text
 from internal_bot.bot.state import GraphState
 from internal_bot.bot import progress, trace
 
@@ -82,7 +83,12 @@ def run(state: GraphState) -> dict:
         threshold = settings.summary_threshold if settings else 20
         if llm_client:
             try:
-                memory_svc.maybe_update_summary(session_name, threshold, llm_client)
+                memory_svc.maybe_update_summary(
+                    session_name,
+                    threshold,
+                    llm_client,
+                    **trace.llm_trace_context(state, node_name, "summarize_memory"),
+                )
             except Exception:
                 pass
     else:
@@ -112,12 +118,15 @@ def run(state: GraphState) -> dict:
         sql_executed=state.get("compiled_sql") or "",
         result_row_count=state.get("result_row_count") or 0,
     )
-
     return _update(state, node_name, t0, {}, log_t0)
 
 
 def _response_to_text(response: dict) -> str:
     """Convert the structured response to a plain-text string for storage."""
+    markdown = strip_markdown_to_text(response.get("markdown") or "")
+    if markdown:
+        return markdown
+
     status = response.get("status", "")
     if status == "success":
         rows = response.get("rows") or []

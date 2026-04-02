@@ -30,6 +30,11 @@ def run(state: GraphState) -> dict:
 	return _update(state, node_name, t0, {
 		"chat_history": mem["messages"],
 		"memory_summary": mem["summary"],
+		"last_user_question": mem.get("last_user_question") or "",
+		"last_non_follow_up_user_question": mem.get("last_non_follow_up_user_question") or "",
+		"last_assistant_response": mem.get("last_assistant_response") or {},
+		"last_assistant_context_text": mem.get("last_assistant_context_text") or "",
+		"last_discovered_doctypes": mem.get("last_discovered_doctypes") or [],
 	}, log_t0)
 
 

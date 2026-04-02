@@ -10,6 +10,7 @@ Also produces a normalized (lowercased, punctuation-stripped) question
 for consistent downstream processing and cache lookups.
 """
 import json
+import re
 import time
 
 import frappe
@@ -53,6 +54,31 @@ Respond in valid JSON only (no Markdown, no extra text):
   "clarification_options": []
 }"""
 
+_FOLLOW_UP_PATTERNS = (
+	r"\b(analy[sz]e|analysis|explain|interpret|summari[sz]e|break down)\b",
+	r"\b(this|that|these|those)\s+(data|result|results|chart|table|numbers)\b",
+	r"\b(more|further|deeper)\b",
+)
+
+_REFINEMENT_FOLLOW_UP_PATTERNS = (
+	r"\btop\b",
+	r"\bbottom\b",
+	r"\bhighest\b",
+	r"\blow(est)?\b",
+	r"\bmost\b",
+	r"\bleast\b",
+	r"\bfirst\b",
+	r"\bsecond\b",
+	r"\bthird\b",
+	r"\bthree\b",
+	r"\bitem(s)?\b",
+	r"\bcustomer(s)?\b",
+	r"\bsupplier(s)?\b",
+	r"\bimpact(ed)?\b",
+	r"\beffect(ed)?\b",
+	r"\bsignificant(ly)?\b",
+)
+
 
 def run(state: GraphState) -> dict:
 	t0 = time.monotonic()
@@ -64,6 +90,17 @@ def run(state: GraphState) -> dict:
 	raw = (state.get("raw_message") or "").strip()
 	llm_client = state.get("_llm_client")  # injected by graph entry
 	trace.detail(state, "Question", raw)
+
+	follow_up_normalized = _build_follow_up_question(state, raw)
+	if follow_up_normalized:
+		trace.detail(state, "Follow-up detected", follow_up_normalized)
+		return _update(state, node_name, t0, {
+			"intent": "query",
+			"intent_reason": "",
+			"normalized_question": follow_up_normalized,
+			"clarification_options": [],
+			"follow_up_to_previous_result": True,
+		}, log_t0)
 
 	# Fast-path: local blocked keyword check before hitting the LLM
 	raw_lower = raw.lower()
@@ -85,12 +122,26 @@ def run(state: GraphState) -> dict:
 			history = (state.get("chat_history") or [])[-4:]
 			messages = [{"role": "system", "content": _INTENT_SYSTEM_PROMPT}]
 			messages.extend({"role": m["role"], "content": m["content"]} for m in history)
+			if state.get("last_assistant_context_text"):
+				messages.append(
+					{
+						"role": "system",
+						"content": "Last structured result context:\n" + state["last_assistant_context_text"],
+					}
+				)
 			messages.append({"role": "user", "content": raw})
 
 			response_text = llm_client.chat_completion(
 				messages=messages,
 				temperature=0.0,
 				max_tokens=300,
+				**trace.llm_trace_context(state, node_name, "classify_intent"),
+			)
+			input_tokens = (state.get("input_tokens") or 0) + (
+				getattr(llm_client, "last_input_tokens", 0) or 0
+			)
+			output_tokens = (state.get("output_tokens") or 0) + (
+				getattr(llm_client, "last_output_tokens", 0) or 0
 			)
 			parsed = json.loads(_strip_fences(response_text))
 			intent = parsed.get("intent", "query")
@@ -105,6 +156,12 @@ def run(state: GraphState) -> dict:
 			normalized = _normalize(raw)
 			reason = ""
 			options = []
+			input_tokens = (state.get("input_tokens") or 0) + (
+				getattr(llm_client, "last_input_tokens", 0) or 0
+			)
+			output_tokens = (state.get("output_tokens") or 0) + (
+				getattr(llm_client, "last_output_tokens", 0) or 0
+			)
 			trace.detail(state, "LLM classification failed, falling back to query", str(exc))
 	else:
 		# No LLM available (e.g. tests without a configured provider)
@@ -112,6 +169,8 @@ def run(state: GraphState) -> dict:
 		normalized = _normalize(raw)
 		reason = ""
 		options = []
+		input_tokens = state.get("input_tokens") or 0
+		output_tokens = state.get("output_tokens") or 0
 		trace.detail(state, "No LLM client, defaulting intent", intent)
 
 	return _update(state, node_name, t0, {
@@ -119,6 +178,11 @@ def run(state: GraphState) -> dict:
 		"intent_reason": reason,
 		"normalized_question": normalized,
 		"clarification_options": options,
+		"follow_up_to_previous_result": False,
+		"input_tokens": input_tokens,
+		"output_tokens": output_tokens,
+		"llm_provider": getattr(llm_client, "provider", ""),
+		"llm_model": getattr(llm_client, "model", ""),
 	}, log_t0)
 
 
@@ -128,11 +192,51 @@ def run(state: GraphState) -> dict:
 
 
 def _normalize(text: str) -> str:
-	import re
 	text = text.lower().strip()
 	text = re.sub(r"[^\w\s]", " ", text)
 	text = re.sub(r"\s+", " ", text)
 	return text.strip()
+
+
+def _build_follow_up_question(state: GraphState, raw: str) -> str:
+	raw_normalized = _normalize(raw)
+	if not raw_normalized:
+		return ""
+
+	last_assistant = state.get("last_assistant_response") or {}
+	last_title = (last_assistant.get("title") or "").strip()
+	last_question = (
+		state.get("last_non_follow_up_user_question")
+		or state.get("last_user_question")
+		or ""
+	).strip()
+	base_question = last_question or _normalize(last_title)
+	if not base_question:
+		return ""
+
+	if _looks_like_follow_up(raw_normalized):
+		return f"analyze more the results for {base_question}"
+
+	if _looks_like_contextual_refinement(raw_normalized, state):
+		return f"{raw_normalized} based on {base_question}"
+
+	return ""
+
+
+def _looks_like_follow_up(normalized_text: str) -> bool:
+	return any(re.search(pattern, normalized_text) for pattern in _FOLLOW_UP_PATTERNS)
+
+
+def _looks_like_contextual_refinement(normalized_text: str, state: GraphState) -> bool:
+	last_assistant = state.get("last_assistant_response") or {}
+	if not last_assistant:
+		return False
+
+	words = normalized_text.split()
+	if len(words) > 8:
+		return False
+
+	return any(re.search(pattern, normalized_text) for pattern in _REFINEMENT_FOLLOW_UP_PATTERNS)
 
 
 def _strip_fences(text: str) -> str:

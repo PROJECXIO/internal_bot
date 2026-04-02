@@ -19,9 +19,10 @@ class TestStructuredFormatter(FrappeTestCase):
 			self._base_state([{"total_sales": 125000}])
 		)
 
-		self.assertEqual(response["response_type"], "plain_text")
-		self.assertIsNone(response["visualization"])
+		self.assertEqual(response["response_type"], "metric_card")
+		self.assertEqual(response["visualization"]["kind"], "metric")
 		self.assertEqual(response["summary"], "Total Sales: 125,000")
+		self.assertEqual(response["markdown"], "")
 
 	def test_single_numeric_value_returns_metric_card_when_requested(self):
 		response = format_structured_response(
@@ -31,6 +32,7 @@ class TestStructuredFormatter(FrappeTestCase):
 		self.assertEqual(response["response_type"], "metric_card")
 		self.assertEqual(response["visualization"]["kind"], "metric")
 		self.assertEqual(response["visualization"]["formatted_value"], "125,000")
+		self.assertEqual(response["markdown"], "")
 
 	def test_single_text_value_returns_plain_text(self):
 		response = format_structured_response(
@@ -40,8 +42,9 @@ class TestStructuredFormatter(FrappeTestCase):
 		self.assertEqual(response["response_type"], "plain_text")
 		self.assertIsNone(response["visualization"])
 		self.assertEqual(response["summary"], "Test Supplier")
+		self.assertEqual(response["markdown"], "")
 
-	def test_label_numeric_rows_default_to_table(self):
+	def test_label_numeric_rows_default_to_bar_chart(self):
 		response = format_structured_response(
 			self._base_state(
 				[
@@ -51,8 +54,9 @@ class TestStructuredFormatter(FrappeTestCase):
 			)
 		)
 
-		self.assertEqual(response["response_type"], "table")
-		self.assertIsNone(response["visualization"])
+		self.assertEqual(response["response_type"], "bar_chart")
+		self.assertEqual(response["visualization"]["kind"], "bar")
+		self.assertEqual(response["markdown"], "")
 
 	def test_label_numeric_rows_return_bar_chart_when_requested(self):
 		response = format_structured_response(
@@ -68,6 +72,7 @@ class TestStructuredFormatter(FrappeTestCase):
 		self.assertEqual(response["response_type"], "bar_chart")
 		self.assertEqual(response["visualization"]["kind"], "bar")
 		self.assertEqual(response["visualization"]["categories"], ["West", "East"])
+		self.assertEqual(response["markdown"], "")
 
 	def test_explicit_pie_chart_request_returns_pie_chart(self):
 		response = format_structured_response(
@@ -82,6 +87,7 @@ class TestStructuredFormatter(FrappeTestCase):
 
 		self.assertEqual(response["response_type"], "pie_chart")
 		self.assertEqual(response["visualization"]["kind"], "pie")
+		self.assertEqual(response["markdown"], "")
 
 	def test_multi_metric_rows_fall_back_to_table(self):
 		response = format_structured_response(
@@ -95,6 +101,7 @@ class TestStructuredFormatter(FrappeTestCase):
 
 		self.assertEqual(response["response_type"], "table")
 		self.assertIsNone(response["visualization"])
+		self.assertEqual(response["markdown"], "")
 
 	def test_negative_pie_values_fall_back_to_bar_chart(self):
 		response = format_structured_response(
@@ -109,6 +116,7 @@ class TestStructuredFormatter(FrappeTestCase):
 
 		self.assertEqual(response["response_type"], "bar_chart")
 		self.assertEqual(response["visualization"]["kind"], "bar")
+		self.assertEqual(response["markdown"], "")
 
 	def test_cached_single_text_table_is_normalized_to_plain_text(self):
 		cached = {
@@ -132,3 +140,78 @@ class TestStructuredFormatter(FrappeTestCase):
 
 		self.assertEqual(response["response_type"], "plain_text")
 		self.assertEqual(response["summary"], "Test Supplier")
+		self.assertEqual(response["markdown"], "")
+
+	def test_follow_up_analysis_for_chart_forces_plain_text_response(self):
+		response = format_structured_response(
+			{
+				**self._base_state(
+					[
+						{"posting_date": "2025-09-16", "total_sales": 229000},
+						{"posting_date": "2025-09-03", "total_sales": 32000},
+					],
+					message="analysis this data more",
+				),
+				"visualization_preference": "text",
+				"follow_up_to_previous_result": True,
+				"last_assistant_response": {"response_type": "bar_chart"},
+				"answer_markdown": "- **2025-09-16** was the strongest day at **229,000**.",
+			}
+		)
+
+		self.assertEqual(response["response_type"], "plain_text")
+		self.assertIsNone(response["visualization"])
+		self.assertEqual(response["markdown"], "- **2025-09-16** was the strongest day at **229,000**.")
+
+	def test_debug_context_window_is_gated_by_settings(self):
+		settings = type("Settings", (), {"enable_debug_context_window": 0})()
+		response = format_structured_response(
+			{
+				**self._base_state([{"total_sales": 125000}]),
+				"debug": True,
+				"_settings": settings,
+				"chat_history": [{"role": "user", "content": "show total sales"}],
+				"memory_summary": "Asked about total sales.",
+				"last_assistant_context_text": "Title: Total Sales",
+				"schema_context": "## Sales Invoice",
+				"input_tokens": 10,
+				"output_tokens": 5,
+			}
+		)
+
+		self.assertIn("debug", response)
+		self.assertNotIn("context_window", response["debug"])
+		self.assertNotIn("token_usage", response["debug"])
+
+	def test_debug_context_window_and_tokens_are_included_when_enabled(self):
+		settings = type("Settings", (), {"enable_debug_context_window": 1})()
+		response = format_structured_response(
+			{
+				**self._base_state([{"total_sales": 125000}]),
+				"debug": True,
+				"_settings": settings,
+				"chat_history": [{"role": "user", "content": "show total sales"}],
+				"memory_summary": "Asked about total sales.",
+				"last_assistant_context_text": "Title: Total Sales",
+				"schema_context": "## Sales Invoice",
+				"last_user_question": "show total sales",
+				"last_non_follow_up_user_question": "show total sales",
+				"follow_up_to_previous_result": True,
+				"discovered_doctypes": ["Sales Invoice"],
+				"visualization_preference": "bar",
+				"input_tokens": 10,
+				"output_tokens": 5,
+			}
+		)
+
+		self.assertEqual(response["debug"]["token_usage"]["input_tokens"], 10)
+		self.assertEqual(response["debug"]["token_usage"]["output_tokens"], 5)
+		self.assertEqual(response["debug"]["token_usage"]["total_tokens"], 15)
+		self.assertEqual(
+			response["debug"]["context_window"]["question_context"]["normalized_question"],
+			"show sales by territory",
+		)
+		self.assertEqual(
+			response["debug"]["context_window"]["question_context"]["discovered_doctypes"],
+			["Sales Invoice"],
+		)

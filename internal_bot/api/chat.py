@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 from frappe import _
 
 from internal_bot.bot.graph import get_graph
+from internal_bot.bot.services.formatter import normalize_cached_response
 from internal_bot.bot.services.llm_client import get_llm_client
 from internal_bot.bot import trace
 
@@ -86,6 +87,7 @@ def ask(message: str, session_id: str = None, debug: bool = False):
 		"input_tokens": 0,
 		"output_tokens": 0,
 		"result_row_count": 0,
+		"answer_markdown": "",
 		# Inject shared objects into state so nodes don't need to re-instantiate
 		"_llm_client": llm_client,
 		"_settings": settings,
@@ -102,7 +104,10 @@ def ask(message: str, session_id: str = None, debug: bool = False):
 			],
 		)
 		graph = get_graph()
-		final_state = graph.invoke(initial_state)
+		final_state = graph.invoke(
+			initial_state,
+			config=trace.graph_invoke_config(initial_state, run_name="internal_bot.ask"),
+		)
 		response = final_state.get("formatted_response") or {
 			"status": "error",
 			"reason": "No response generated.",
@@ -110,10 +115,12 @@ def ask(message: str, session_id: str = None, debug: bool = False):
 		}
 		response["session_id"] = session_name
 		trace.request_complete(final_state, response)
+		trace.flush_langsmith()
 		return response
 	except Exception as exc:
 		frappe.log_error(message=frappe.get_traceback(), title="Internal Bot: graph invoke failed")
 		trace.request_error(initial_state, str(exc))
+		trace.flush_langsmith()
 		return {
 			"status": "error",
 			"reason": "An internal error occurred. Please try again.",
@@ -324,7 +331,17 @@ def _deserialize_message(message: dict) -> dict:
 	if message.get("role") == "assistant" and message.get("structured_response"):
 		try:
 			payload = frappe.parse_json(message["structured_response"])
+			payload = normalize_cached_response(
+				payload,
+				{
+					"raw_message": message.get("content") or "",
+					"normalized_question": payload.get("title") or "",
+					"query_result_rows": payload.get("rows") or [],
+					"answer_markdown": payload.get("markdown") or "",
+				},
+			)
 			payload["role"] = "assistant"
+			payload["content"] = payload.get("content") or message.get("content") or ""
 			return payload
 		except Exception:
 			pass

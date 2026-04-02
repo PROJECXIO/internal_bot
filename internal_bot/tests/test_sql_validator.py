@@ -207,3 +207,17 @@ class TestGenerateQueryIntent:
 		user_message = call_args[0][0][1]["content"]
 		assert "DB error" in user_message
 		assert "attempt 1" in user_message.lower() or "previous attempt" in user_message.lower()
+
+	def test_passes_trace_context_to_llm_when_provided(self):
+		raw = '{"mode": "list", "doctype": "Customer", "fields": ["name"], "filters": [], "limit": 10}'
+		llm = _mock_llm(raw)
+		generate_query_intent(
+			"show customers",
+			"",
+			"",
+			llm,
+			trace_metadata={"node": "query_planner"},
+			trace_tags=["internal_bot", "llm"],
+		)
+		assert llm.chat_completion.call_args.kwargs["trace_metadata"] == {"node": "query_planner"}
+		assert llm.chat_completion.call_args.kwargs["trace_tags"] == ["internal_bot", "llm"]

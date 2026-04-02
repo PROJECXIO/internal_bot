@@ -19,6 +19,8 @@
   "section_break_cache",
   "enable_cache",
   "cache_ttl_hours",
+  "section_break_debug",
+  "enable_debug_context_window",
   "section_break_security",
   "blocked_doctypes",
   "max_result_rows"
@@ -119,6 +121,18 @@
    "fieldname": "cache_ttl_hours",
    "fieldtype": "Int",
    "label": "Cache TTL (hours)"
+  },
+  {
+   "fieldname": "section_break_debug",
+   "fieldtype": "Section Break",
+   "label": "Developer Debug"
+  },
+  {
+   "default": "0",
+   "description": "When a request is sent with debug enabled, include the backend context window and token usage in the response payload.",
+   "fieldname": "enable_debug_context_window",
+   "fieldtype": "Check",
+   "label": "Return Debug Context Window"
   },
   {
    "fieldname": "section_break_security",

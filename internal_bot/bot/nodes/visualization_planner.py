@@ -46,6 +46,14 @@ def run(state: GraphState) -> dict:
     if state.get("_emit_progress"):
         progress.emit(state, node_name, "Choosing visualization")
 
+    if _should_explain_previous_result(state):
+        trace.detail(state, "Viz choice", "text (follow-up analysis)")
+        trace.detail(state, "Answer prefix", "Here's a deeper analysis:")
+        return _update(state, node_name, t0, {
+            "visualization_preference": "text",
+            "answer_prefix": "Here's a deeper analysis:",
+        }, log_t0)
+
     llm_client = state.get("_llm_client")
     if not llm_client:
         return _update(state, node_name, t0, {
@@ -70,7 +78,12 @@ def run(state: GraphState) -> dict:
     ]
 
     try:
-        raw = llm_client.chat_completion(messages, temperature=0.0, max_tokens=150)
+        raw = llm_client.chat_completion(
+            messages,
+            temperature=0.0,
+            max_tokens=150,
+            **trace.llm_trace_context(state, node_name, "choose_visualization"),
+        )
         input_tokens = (state.get("input_tokens") or 0) + (
             getattr(llm_client, "last_input_tokens", 0) or 0
         )
@@ -141,6 +154,22 @@ def _safe_sample(rows: list[dict], n: int) -> list[dict]:
                 clean[k] = v
         result.append(clean)
     return result
+
+
+def _should_explain_previous_result(state: GraphState) -> bool:
+    if not state.get("follow_up_to_previous_result"):
+        return False
+
+    last_response = state.get("last_assistant_response") or {}
+    last_response_type = last_response.get("response_type")
+    if last_response_type not in {"bar_chart", "pie_chart", "metric_card", "table"}:
+        return False
+
+    question = (state.get("raw_message") or "").lower()
+    if any(keyword in question for keyword in ("chart", "graph", "plot", "visual", "table")):
+        return False
+
+    return True
 
 
 def _update(state: GraphState, node_name: str, t0: float, updates: dict, log_t0: float) -> dict:

@@ -24,6 +24,12 @@ class GraphState(TypedDict, total=False):
     # ── Node 2: Memory Loader ────────────────────────────────────────
     chat_history: list      # [{"role": "user"|"assistant", "content": "..."}]
     memory_summary: str     # rolling LLM summary of older messages
+    last_user_question: str
+    last_non_follow_up_user_question: str
+    last_assistant_response: dict
+    last_assistant_context_text: str
+    last_discovered_doctypes: list
+    follow_up_to_previous_result: bool
 
     # ── Node 3: Schema Discovery ─────────────────────────────────────
     discovered_doctypes: list   # ["Sales Invoice", "Customer", ...]
@@ -50,6 +56,7 @@ class GraphState(TypedDict, total=False):
     summary: str
     visualization_preference: str  # "auto" | "card" | "bar" | "pie" | "text"
     answer_prefix: str             # friendly intro sentence, e.g. "Here's what I found:"
+    answer_markdown: str           # markdown answer or brief shown in the frontend
 
     # ── Per-request injected objects (must be in schema for LangGraph to preserve) ──
     _llm_client: Any   # LLMClient instance, injected in chat.py

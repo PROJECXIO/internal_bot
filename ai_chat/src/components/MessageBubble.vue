@@ -1,5 +1,8 @@
 <template>
-  <div class="flex" :class="isUser ? 'justify-end' : 'justify-start'">
+  <div
+    class="flex min-w-0"
+    :class="[isUser ? 'justify-end' : 'justify-start', isInlineChartExpanded && !isUser ? 'w-full' : '']"
+  >
     <!-- Agent avatar -->
     <div
       v-if="!isUser"
@@ -9,11 +12,14 @@
     </div>
 
     <div
-      class="max-w-[80%] rounded-2xl px-4 py-2.5 text-sm"
+      class="rounded-2xl px-4 py-2.5 text-sm transition-[max-width] duration-200"
+      :style="bubbleStyle"
       :class="
         isUser
           ? 'bg-brand text-white rounded-br-sm'
-          : 'bg-brand-light text-gray-900 rounded-bl-sm'
+          : isInlineChartExpanded
+            ? 'bg-brand-light text-gray-900 rounded-bl-sm'
+            : 'bg-brand-light text-gray-900 rounded-bl-sm max-w-[80%]'
       "
     >
       <!-- User message -->
@@ -22,12 +28,68 @@
       </template>
 
       <template v-else-if="message.status === 'success' && message.responseType === 'plain_text'">
-        <p v-if="message.answerPrefix" class="text-sm font-medium text-slate-600 mb-1">
-          {{ message.answerPrefix }}
-        </p>
-        <p class="whitespace-pre-wrap break-words text-slate-800">
-          {{ message.summary || message.content }}
-        </p>
+        <div class="space-y-3">
+          <div>
+            <p v-if="message.answerPrefix" class="text-sm font-medium text-slate-600 mb-1">
+              {{ message.answerPrefix }}
+            </p>
+            <p v-if="message.title" class="font-semibold text-xs uppercase tracking-wide text-slate-500 mb-1">
+              {{ message.title }}
+            </p>
+            <div
+              v-if="message.markdown"
+              class="prose-chat prose-chat--structured break-words text-slate-800"
+              v-html="renderMarkdown(message.markdown)"
+            />
+            <p v-else class="whitespace-pre-wrap break-words text-slate-800">
+              {{ message.summary || message.content }}
+            </p>
+          </div>
+
+          <div v-if="message.rows && message.rows.length" class="flex items-center gap-3">
+            <button
+              class="text-xs font-medium text-brand hover:text-brand-dark transition-colors cursor-pointer"
+              @click="showTable = !showTable"
+            >
+              {{ showTable ? "Hide data" : "Show data" }}
+            </button>
+            <button
+              type="button"
+              class="message-action-icon-button"
+              title="Export CSV"
+              aria-label="Export CSV"
+              @click="exportCSV"
+            >
+              <span class="message-action-icon" aria-hidden="true" v-html="exportIconSvg" />
+            </button>
+          </div>
+
+          <div v-if="message.rows && message.rows.length && showTable" class="space-y-2">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Raw data</p>
+            <div class="overflow-x-auto rounded-lg border border-gray-200">
+              <table class="w-full border-collapse text-xs">
+                <thead>
+                  <tr>
+                    <th
+                      v-for="col in message.columns"
+                      :key="col"
+                      class="bg-gray-50 px-3 py-1.5 text-left font-semibold text-gray-700 border-b border-gray-200 whitespace-nowrap"
+                    >{{ col }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(row, ri) in message.rows" :key="ri">
+                    <td
+                      v-for="col in message.columns"
+                      :key="col"
+                      class="bg-white px-3 py-1.5 border-b border-gray-100 text-gray-600 last:border-0"
+                    >{{ row[col] ?? '—' }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       </template>
 
       <template v-else-if="message.status === 'success' && message.responseType === 'metric_card' && message.visualization">
@@ -35,6 +97,11 @@
           <p v-if="message.answerPrefix" class="text-sm font-medium text-slate-600 mb-1">
             {{ message.answerPrefix }}
           </p>
+          <div
+            v-if="message.markdown"
+            class="prose-chat prose-chat--structured structured-response-copy break-words"
+            v-html="renderMarkdown(message.markdown)"
+          />
           <p v-if="message.title" class="font-semibold text-xs uppercase tracking-wide text-slate-500">
             {{ message.title }}
           </p>
@@ -47,7 +114,7 @@
           <p v-if="message.visualization.context" class="metric-card__context">
             {{ message.visualization.context }}
           </p>
-          <p v-if="message.summary" class="metric-card__summary">
+          <p v-if="message.summary && !message.markdown" class="metric-card__summary">
             {{ message.summary }}
           </p>
         </div>
@@ -61,19 +128,27 @@
             <p v-if="message.answerPrefix" class="text-sm font-medium text-slate-600 mb-1">
               {{ message.answerPrefix }}
             </p>
+            <div
+              v-if="message.markdown"
+              class="prose-chat prose-chat--structured structured-response-copy break-words"
+              v-html="renderMarkdown(message.markdown)"
+            />
             <p v-if="message.title" class="font-semibold text-xs uppercase tracking-wide text-slate-500 mb-1">
               {{ message.title }}
             </p>
-            <p v-if="message.summary" class="text-sm text-slate-700">
+            <p v-if="message.summary && !message.markdown" class="text-sm text-slate-700">
               {{ message.summary }}
             </p>
           </div>
 
-          <div class="chart-card">
+          <div
+            class="chart-card transition-all duration-200"
+            :class="isInlineChartExpanded ? 'chart-card--expanded' : ''"
+          >
             <VueApexCharts
               :type="chartType"
-              height="260"
-              :options="chartOptions"
+              :height="inlineChartHeight"
+              :options="inlineChartOptions"
               :series="chartSeries"
             />
           </div>
@@ -89,6 +164,24 @@
           </div>
 
           <div class="flex items-center gap-3">
+            <button
+              type="button"
+              class="message-action-icon-button"
+              :title="isInlineChartExpanded ? 'Collapse chart' : 'Expand chart'"
+              :aria-label="isInlineChartExpanded ? 'Collapse chart' : 'Expand chart'"
+              @click="toggleInlineExpand"
+            >
+              <span class="message-action-icon" aria-hidden="true" v-html="expandIconSvg" />
+            </button>
+            <button
+              type="button"
+              class="message-action-icon-button"
+              title="Open fullscreen"
+              aria-label="Open fullscreen"
+              @click="openChartDialog"
+            >
+              <span class="message-action-icon" aria-hidden="true" v-html="fullscreenIconSvg" />
+            </button>
             <button
               v-if="message.visualization.show_table_toggle"
               class="text-xs font-medium text-brand hover:text-brand-dark transition-colors cursor-pointer"
@@ -133,6 +226,56 @@
               </table>
             </div>
           </div>
+
+          <Teleport to="body">
+            <div
+              v-if="isChartDialogOpen"
+              class="chart-dialog-backdrop"
+              @click.self="closeChartDialog"
+            >
+              <div class="chart-dialog">
+                <div class="chart-dialog__header">
+                  <div class="chart-dialog__heading">
+                    <p v-if="message.title" class="chart-dialog__eyebrow">{{ message.title }}</p>
+                    <p class="chart-dialog__title">
+                      {{ message.answerPrefix || message.summary || "Chart details" }}
+                    </p>
+                  </div>
+
+                  <div class="chart-dialog__actions">
+                    <button
+                      v-if="message.columns && message.rows && message.rows.length"
+                      type="button"
+                      class="message-action-icon-button"
+                      title="Export CSV"
+                      aria-label="Export CSV"
+                      @click="exportCSV"
+                    >
+                      <span class="message-action-icon" aria-hidden="true" v-html="exportIconSvg" />
+                    </button>
+                    <button
+                      type="button"
+                      class="message-action-icon-button"
+                      title="Close chart"
+                      aria-label="Close chart"
+                      @click="closeChartDialog"
+                    >
+                      <span class="message-action-icon" aria-hidden="true" v-html="closeIconSvg" />
+                    </button>
+                  </div>
+                </div>
+
+                <div class="chart-dialog__body">
+                  <VueApexCharts
+                    :type="chartType"
+                    height="420"
+                    :options="expandedChartOptions"
+                    :series="chartSeries"
+                  />
+                </div>
+              </div>
+            </div>
+          </Teleport>
         </div>
       </template>
 
@@ -140,10 +283,15 @@
         <p v-if="message.answerPrefix" class="text-sm font-medium text-slate-600 mb-1">
           {{ message.answerPrefix }}
         </p>
+        <div
+          v-if="message.markdown"
+          class="prose-chat prose-chat--structured structured-response-copy break-words"
+          v-html="renderMarkdown(message.markdown)"
+        />
         <p v-if="message.title" class="font-semibold text-xs uppercase tracking-wide text-gray-500 mb-2">
           {{ message.title }}
         </p>
-        <p v-if="message.summary" class="text-sm text-slate-700 mb-2">
+        <p v-if="message.summary && !message.markdown" class="text-sm text-slate-700 mb-2">
           {{ message.summary }}
         </p>
         <div class="overflow-x-auto rounded-lg border border-gray-200">
@@ -224,12 +372,61 @@
           v-html="renderMarkdown(message.content || '')"
         />
       </template>
+
+      <details v-if="hasDebugPanel" class="message-debug-panel">
+        <summary class="message-debug-panel__summary">
+          <span>Debug context</span>
+          <span v-if="debugTokenUsage.total_tokens" class="message-debug-panel__token-pill">
+            {{ debugTokenUsage.total_tokens.toLocaleString() }} tokens
+          </span>
+        </summary>
+
+        <div class="message-debug-panel__body">
+          <div v-if="debugTokenUsage.total_tokens" class="message-debug-panel__metrics">
+            <div class="message-debug-panel__metric">
+              <span class="message-debug-panel__metric-label">Input</span>
+              <span class="message-debug-panel__metric-value">{{ debugTokenUsage.input_tokens.toLocaleString() }}</span>
+            </div>
+            <div class="message-debug-panel__metric">
+              <span class="message-debug-panel__metric-label">Output</span>
+              <span class="message-debug-panel__metric-value">{{ debugTokenUsage.output_tokens.toLocaleString() }}</span>
+            </div>
+            <div class="message-debug-panel__metric">
+              <span class="message-debug-panel__metric-label">Total</span>
+              <span class="message-debug-panel__metric-value">{{ debugTokenUsage.total_tokens.toLocaleString() }}</span>
+            </div>
+          </div>
+
+          <div v-if="debugQuestionContextEntries.length" class="message-debug-panel__section">
+            <p class="message-debug-panel__label">Question context</p>
+            <div class="message-debug-panel__kv-grid">
+              <div
+                v-for="entry in debugQuestionContextEntries"
+                :key="entry.key"
+                class="message-debug-panel__kv-item"
+              >
+                <span class="message-debug-panel__kv-key">{{ entry.label }}</span>
+                <span class="message-debug-panel__kv-value">{{ entry.value }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div
+            v-for="section in debugTextSections"
+            :key="section.key"
+            class="message-debug-panel__section"
+          >
+            <p class="message-debug-panel__label">{{ section.label }}</p>
+            <pre class="message-debug-panel__pre">{{ section.content }}</pre>
+          </div>
+        </div>
+      </details>
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { marked } from "marked";
 import VueApexCharts from "vue3-apexcharts";
 import RevenyuCut from "./RevenyuCut.vue";
@@ -242,6 +439,8 @@ defineEmits(["option"]);
 
 const isUser = computed(() => props.message.role === "user");
 const showTable = ref(false);
+const isInlineChartExpanded = ref(false);
+const isChartDialogOpen = ref(false);
 
 const downloadIconSvg = `
   <svg viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -255,13 +454,87 @@ const exportIconSvg = `
   </svg>
 `.trim();
 
+const expandIconSvg = `
+  <svg viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <path d="M7 4.75H4.75V7M13 4.75h2.25V7M7 15.25H4.75V13M13 15.25h2.25V13M5 5l3.25 3.25M15 5l-3.25 3.25M5 15l3.25-3.25M15 15l-3.25-3.25" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.55" />
+  </svg>
+`.trim();
+
+const fullscreenIconSvg = `
+  <svg viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <path d="M3.75 7V3.75H7M16.25 7V3.75H13M3.75 13v3.25H7M16.25 13v3.25H13" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" />
+  </svg>
+`.trim();
+
+const closeIconSvg = `
+  <svg viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <path d="M6 6l8 8M14 6l-8 8" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" />
+  </svg>
+`.trim();
+
 const isChartResponse = computed(() =>
   ["bar_chart", "pie_chart"].includes(props.message.responseType)
 );
 
+const bubbleStyle = computed(() => {
+  if (!isInlineChartExpanded.value || isUser.value) return null;
+  return {
+    width: "min(1120px, calc(100% - 2.25rem))",
+    maxWidth: "calc(100% - 2.25rem)",
+  };
+});
+
+const inlineChartHeight = computed(() => (isInlineChartExpanded.value ? 420 : 260));
+
 const chartType = computed(() =>
   props.message.visualization?.kind === "pie" ? "pie" : "bar"
 );
+
+const hasDebugPanel = computed(() => {
+  const debug = props.message.debug;
+  return Boolean(
+    !isUser.value
+    && debug
+    && (
+      debug.context_window
+      || (debug.token_usage && (debug.token_usage.input_tokens || debug.token_usage.output_tokens))
+    )
+  );
+});
+
+const debugTokenUsage = computed(() => {
+  const tokenUsage = props.message.debug?.token_usage || {};
+  const inputTokens = Number(tokenUsage.input_tokens || 0);
+  const outputTokens = Number(tokenUsage.output_tokens || 0);
+  return {
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    total_tokens: Number(tokenUsage.total_tokens || inputTokens + outputTokens),
+  };
+});
+
+const debugQuestionContextEntries = computed(() => {
+  const questionContext = props.message.debug?.context_window?.question_context || {};
+  return [
+    { key: "raw_message", label: "Raw message", value: questionContext.raw_message },
+    { key: "normalized_question", label: "Normalized question", value: questionContext.normalized_question },
+    { key: "follow_up", label: "Follow-up reuse", value: formatDebugQuestionValue(questionContext.follow_up_to_previous_result) },
+    { key: "last_user_question", label: "Last user question", value: questionContext.last_user_question },
+    { key: "last_non_follow_up_user_question", label: "Last non-follow-up question", value: questionContext.last_non_follow_up_user_question },
+    { key: "discovered_doctypes", label: "Discovered DocTypes", value: formatDebugQuestionValue(questionContext.discovered_doctypes) },
+    { key: "visualization_preference", label: "Visualization preference", value: questionContext.visualization_preference },
+  ].filter((entry) => entry.value !== "");
+});
+
+const debugTextSections = computed(() => {
+  const contextWindow = props.message.debug?.context_window || {};
+  return [
+    { key: "history", label: "History", content: formatDebugHistory(contextWindow.history) },
+    { key: "memory_summary", label: "Memory summary", content: formatDebugBlock(contextWindow.memory_summary) },
+    { key: "last_result_context", label: "Last result context", content: formatDebugBlock(contextWindow.last_result_context) },
+    { key: "schema_context", label: "Schema context", content: formatDebugBlock(contextWindow.schema_context) },
+  ].filter((section) => section.content);
+});
 
 const chartSeries = computed(() => {
   const visualization = props.message.visualization;
@@ -296,7 +569,7 @@ const chartHighLow = computed(() => {
   return { maxIdx, minIdx, maxVal: data[maxIdx], minVal: data[minIdx] };
 });
 
-const chartOptions = computed(() => {
+function buildChartOptions(expanded = false) {
   const visualization = props.message.visualization;
   const categories = visualization?.categories || [];
   const valueLabel = visualization?.value_key?.replaceAll("_", " ") || "Value";
@@ -312,7 +585,7 @@ const chartOptions = computed(() => {
       labels: categories,
       legend: {
         position: "bottom",
-        fontSize: "12px",
+        fontSize: expanded ? "13px" : "12px",
       },
       stroke: {
         colors: ["#ffffff"],
@@ -387,7 +660,10 @@ const chartOptions = computed(() => {
     xaxis: {
       categories,
       labels: {
-        rotate: -20,
+        rotate: expanded ? -12 : -20,
+        style: {
+          fontSize: expanded ? "12px" : "11px",
+        },
       },
     },
     yaxis: {
@@ -408,10 +684,37 @@ const chartOptions = computed(() => {
       },
     },
   };
-});
+}
+
+const chartOptions = computed(() => buildChartOptions(false));
+const inlineChartOptions = computed(() => buildChartOptions(isInlineChartExpanded.value));
+const expandedChartOptions = computed(() => buildChartOptions(true));
 
 function renderMarkdown(text) {
   return marked.parse(text, { async: false });
+}
+
+function formatDebugHistory(history) {
+  if (!Array.isArray(history) || !history.length) return "";
+  return history
+    .map((entry) => `${String(entry.role || "").toUpperCase()}: ${entry.content || ""}`.trim())
+    .join("\n\n");
+}
+
+function formatDebugBlock(value) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value.trim();
+  if (Array.isArray(value) || typeof value === "object") {
+    return JSON.stringify(value, null, 2);
+  }
+  return String(value).trim();
+}
+
+function formatDebugQuestionValue(value) {
+  if (value === null || value === undefined) return "";
+  if (Array.isArray(value)) return value.join(", ");
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  return String(value).trim();
 }
 
 function formatChartValue(value) {
@@ -445,4 +748,30 @@ function exportCSV() {
   a.click();
   URL.revokeObjectURL(url);
 }
+
+function openChartDialog() {
+  isChartDialogOpen.value = true;
+}
+
+function closeChartDialog() {
+  isChartDialogOpen.value = false;
+}
+
+function toggleInlineExpand() {
+  isInlineChartExpanded.value = !isInlineChartExpanded.value;
+}
+
+function handleKeydown(event) {
+  if (event.key === "Escape" && isChartDialogOpen.value) {
+    closeChartDialog();
+  }
+}
+
+onMounted(() => {
+  document.addEventListener("keydown", handleKeydown);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener("keydown", handleKeydown);
+});
 </script>

@@ -16,6 +16,7 @@ class AIProviderSettings(Document):
 	blocked_doctypes: DF.SmallText | None
 	cache_ttl_hours: DF.Int
 	enable_cache: DF.Check
+	enable_debug_context_window: DF.Check
 	max_result_rows: DF.Int
 	max_tokens: DF.Int
 	memory_window: DF.Int
@@ -86,3 +87,12 @@ def test_connection():
 		}
 	except Exception as exc:
 		return {"success": False, "message": str(exc), "model": client.model, "latency_ms": None}
+
+
+@frappe.whitelist()
+def get_chat_debug_settings():
+	"""Return frontend-safe debug settings for AI Chat."""
+	settings = frappe.get_doc("AI Provider Settings")
+	return {
+		"enable_debug_context_window": bool(settings.enable_debug_context_window),
+	}

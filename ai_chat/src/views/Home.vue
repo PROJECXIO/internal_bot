@@ -277,6 +277,7 @@ export default {
         status: payload.status || "",
         responseType: payload.response_type || "",
         visualization: payload.visualization || null,
+        answerPrefix: payload.answer_prefix || "",
         summary: payload.summary || "",
         title: payload.title || "",
         columns: payload.columns || [],

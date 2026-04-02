@@ -21,39 +21,46 @@ from internal_bot.bot import progress
 _SYSTEM_PROMPT = """\
 You are a data query assistant for an ERP system.
 
-Given a user's question, the available database schema, and conversation \
-history, decide whether you have enough information to run a specific \
-database query.
+Given a user's question, the matching DocTypes, and conversation history, \
+decide whether you have enough information to run a specific database query.
 
 Output ONLY valid JSON — no explanation, no markdown fences.
 
-If you have enough information to query:
-{"ready": true}
+If ready:   {"ready": true}
+If not:     {"ready": false, "question": "ONE focused question", "options": ["option1", ...]}
 
-If you need more information, ask ONE focused question and provide \
-context-appropriate options for the user to choose from:
-{"ready": false, "question": "Your single question here", "options": ["option1", "option2"]}
+---
 
-## When you MUST ask (do NOT say ready: true):
+## Step 1 — Is the DocType resolved?
 
-1. MULTIPLE DOCUMENT TYPES match and the user has not explicitly named one.
-   → Ask which document. Options = only the 3-5 most relevant document names
-     from the Matching DocTypes list (exclude setup/configuration types like
-     "Sales Partner Type", "Sales Taxes and Charges Template", "Sales Stage",
-     "Sales Person" — keep only transactional documents).
+Check if the user's question (or conversation history) already names one of \
+the Matching DocTypes.
+- If YES → DocType is resolved. Do NOT ask about it.
+- If NO  → Ask which document. Options = 3-5 transactional DocType names from \
+  the Matching DocTypes list (skip config types like "Sales Stage", \
+  "Sales Taxes and Charges Template", "Sales Partner Type").
 
-2. A TIME PERIOD is implied but not specified ("a period", "some period",
-   "last period", vague time reference).
-   → Ask for the period. Options = ["This month", "Last month", "This year",
-     "Last year", "Last 30 days", "Custom range"]
+## Step 2 — Is the time period resolved?
 
-3. BOTH apply → ask about document type first (next turn will ask period).
+Only ask about the period if the question contains a vague PLACEHOLDER for a \
+period that the user clearly intends to specify (phrases like "for a period", \
+"for some period", "during a period", "for the period").
+- If the question has such a placeholder → ask for the period.
+  Options = ["This month", "Last month", "This year", "Last year", \
+  "Last 30 days", "Custom range"]
+- If NO period is mentioned at all → that is fine, do NOT invent a requirement.
+- If a specific period IS already named ("this month", "2024", "last year") → resolved.
+
+## Step 3 — Decision
+
+- Both DocType and period are resolved (or not needed) → {"ready": true}
+- DocType unresolved → ask about DocType first
+- DocType resolved but period placeholder remains → ask about period
 
 ## Rules:
-- Ask only ONE question at a time
+- Ask only ONE question per turn
 - Read conversation history — never re-ask an already-answered question
-- Be conservative: when in doubt, ask rather than assume
-- "options" must always be present (use [] if no good options exist)
+- "options" must always be present (use [] if truly no options apply)
 """
 
 
@@ -70,20 +77,6 @@ def run(state: GraphState) -> dict:
     question = state.get("normalized_question") or state.get("raw_message", "")
     schema_context = state.get("schema_context") or ""
     discovered = state.get("discovered_doctypes") or []
-
-    # Fast-path: if the user's question explicitly names one of the discovered
-    # DocTypes AND there is no vague/unresolved time period, skip the LLM.
-    _VAGUE_PERIOD_PHRASES = (
-        "a period", "some period", "the period", "certain period",
-        "a time", "some time", "a date range", "some date",
-        "for period", "which period", "what period",
-    )
-    question_lower = question.lower()
-    has_vague_period = any(p in question_lower for p in _VAGUE_PERIOD_PHRASES)
-    if not has_vague_period:
-        for dt in discovered:
-            if dt.lower() in question_lower:
-                return _update(state, node_name, t0, {"ready_to_query": True})
 
     # Build conversation history context
     history_lines = []

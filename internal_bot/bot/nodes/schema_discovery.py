@@ -59,6 +59,8 @@ def run(state: GraphState) -> dict:
         user=user,
         blocked=blocked,
         query_embedding=query_embedding,
+        preferred_doctypes=state.get("last_discovered_doctypes") or [],
+        follow_up_to_previous_result=bool(state.get("follow_up_to_previous_result")),
     )
     decision, selected_candidates = hybrid_scorer.classify_confidence(candidates)
     previous_doctypes = set(state.get("last_discovered_doctypes") or [])

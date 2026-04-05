@@ -109,7 +109,7 @@ class TestGraphIntegration(FrappeTestCase):
 		frappe.db.set_value("AI Chat Session", _TEST_SESSION, "total_messages", 0)
 		frappe.db.delete(
 			"AI DocType Alias",
-			{"alias": ["in", ["فاتورة مبيعات", "عميل", "invoices"]]},
+			{"alias": ["in", ["فاتورة مبيعات", "عميل", "invoices", "مبيعات"]]},
 		)
 		frappe.db.commit()
 		invalidate_alias_cache()
@@ -470,6 +470,24 @@ class TestGraphIntegration(FrappeTestCase):
 		     patch("internal_bot.bot.nodes.query_planner.permission_service") as mock_perm:
 			mock_perm.check_doctype_read_access.return_value = True
 			mock_qe.execute_query_intent.return_value = ([{"name": "SINV-0001"}], None)
+			result = graph.invoke(state)
+
+		self.assertEqual(result["schema_decision"], "clear_winner")
+		self.assertEqual(result["discovered_doctypes"], ["Sales Invoice"])
+		self.assertEqual(result["formatted_response"]["status"], "success")
+
+	def test_arabic_sales_keyword_alias_prefers_sales_invoice(self):
+		self._ensure_alias("Sales Invoice", "مبيعات", "ar")
+		intent_response = '{"intent": "query", "normalized_question": "المبيعات بالشهر", "reason": "", "clarification_options": []}'
+		query_intent = '{"mode": "analytics", "primary_doctype": "Sales Invoice", "joins": [], "dimensions": ["MONTH(posting_date)"], "metrics": [{"func": "SUM", "field": "grand_total", "alias": "total_sales"}], "filters": [], "limit": 12}'
+		llm = _make_mock_llm([intent_response, query_intent, _VIZ_TEXT, _ANSWER_MARKDOWN])
+		state = _base_state("المبيعات بالشهر", llm_client=llm)
+		graph = get_graph()
+
+		with patch("internal_bot.bot.nodes.query_planner.query_executor") as mock_qe, \
+		     patch("internal_bot.bot.nodes.query_planner.permission_service") as mock_perm:
+			mock_perm.check_doctype_read_access.return_value = True
+			mock_qe.execute_query_intent.return_value = ([{"month": "2026-04", "total_sales": 229000}], None)
 			result = graph.invoke(state)
 
 		self.assertEqual(result["schema_decision"], "clear_winner")

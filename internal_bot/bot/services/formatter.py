@@ -445,6 +445,10 @@ def _build_grouped_chart_visualization(rows: list[dict], columns: list[str], tit
 	if preference != "bar" and not _should_auto_use_grouped_chart(title):
 		return None
 
+	time_comparison_grouped_chart = _build_time_comparison_grouped_chart(rows, columns, title)
+	if time_comparison_grouped_chart:
+		return time_comparison_grouped_chart
+
 	long_form_grouped_chart = _build_long_form_grouped_chart(rows, columns, title)
 	if long_form_grouped_chart:
 		return long_form_grouped_chart
@@ -554,6 +558,67 @@ def _build_long_form_grouped_chart(rows: list[dict], columns: list[str], title: 
 			"show_table_toggle": True,
 		},
 		"summary": _summarize_long_form_grouped_chart(categories, series_names, series, series_key),
+	}
+
+
+def _build_time_comparison_grouped_chart(rows: list[dict], columns: list[str], title: str) -> dict | None:
+	if len(columns) != 4:
+		return None
+
+	numeric_keys = [column for column in columns if _is_numeric_column(rows, column)]
+	if len(numeric_keys) != 1:
+		return None
+
+	value_key = numeric_keys[0]
+	dimension_keys = [column for column in columns if column != value_key]
+	if set(dimension_keys) != {"YEAR(posting_date)", "MONTH(posting_date)", "DAY(posting_date)"}:
+		return None
+
+	categories: list[str] = []
+	series_names: list[str] = []
+	values_by_year_and_day: dict[str, dict[str, float]] = {}
+
+	for row in rows:
+		year = row.get("YEAR(posting_date)")
+		month = row.get("MONTH(posting_date)")
+		day = row.get("DAY(posting_date)")
+		value = row.get(value_key)
+		if not all(_is_numeric_value(part) for part in (year, month, day, value)):
+			return None
+
+		category = f"{int(month):02d}-{int(day):02d}"
+		series_name = str(int(year))
+		if category not in categories:
+			categories.append(category)
+		if series_name not in series_names:
+			series_names.append(series_name)
+
+		series_values = values_by_year_and_day.setdefault(series_name, {})
+		series_values[category] = series_values.get(category, 0.0) + float(value)
+
+	series = [
+		{
+			"name": series_name,
+			"data": [values_by_year_and_day.get(series_name, {}).get(category, 0.0) for category in categories],
+		}
+		for series_name in series_names
+	]
+	if not any(any(value != 0 for value in metric["data"]) for metric in series):
+		return None
+
+	return {
+		"response_type": "bar_chart",
+		"visualization": {
+			"kind": "grouped_bar",
+			"layout": _detect_bar_layout(title),
+			"label_key": "month_day",
+			"series_key": "YEAR(posting_date)",
+			"value_key": value_key,
+			"series": series,
+			"categories": categories,
+			"show_table_toggle": True,
+		},
+		"summary": _summarize_long_form_grouped_chart(categories, series_names, series, "YEAR(posting_date)"),
 	}
 
 

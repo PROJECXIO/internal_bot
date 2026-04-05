@@ -14,6 +14,9 @@ class GraphState(TypedDict, total=False):
     session_name: str       # AI Chat Session document name
     debug: bool             # include debug fields in response?
     max_rows: int           # from AI Provider Settings.max_result_rows
+    current_date: str       # YYYY-MM-DD for this request
+    current_day_name: str   # Monday, Tuesday, ...
+    current_year: int       # numeric year for this request
 
     # ── Node 1: Intent Parser ────────────────────────────────────────
     normalized_question: str

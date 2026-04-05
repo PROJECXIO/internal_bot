@@ -11,7 +11,12 @@ import frappe
 
 from internal_bot.bot.services import schema as schema_svc
 from internal_bot.bot.services.doctype_aliases import get_aliases_for_doctype
-from internal_bot.bot.services.text_normalizer import normalize_text, remove_stop_words, tokenize
+from internal_bot.bot.services.text_normalizer import (
+    normalize_phrase_for_match,
+    normalize_text,
+    remove_stop_words,
+    tokenize,
+)
 
 _CORPUS_CACHE_KEY = "internal_bot:schema_corpus:v1"
 _EMBEDDINGS_CACHE_KEY = "internal_bot:schema_corpus_embeddings:v1"
@@ -67,8 +72,11 @@ def build_corpus_document(
     normalized_aliases = []
     for alias in aliases:
         normalized_alias = normalize_text(alias)
+        match_alias = normalize_phrase_for_match(alias)
         if normalized_alias:
             normalized_aliases.append(normalized_alias)
+        if match_alias:
+            normalized_aliases.append(match_alias)
 
     field_labels = [field.get("label") or field.get("fieldname") or "" for field in meta_fields]
     link_targets = [link.get("links_to") or "" for link in meta_links]

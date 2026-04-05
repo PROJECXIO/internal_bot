@@ -7,6 +7,7 @@ that the backend compiles into a permission-safe query.
 generate_query_intent() — calls the LLM and returns a validated JSON dict
 validate_sql()          — kept for defense-in-depth checks (analytics SQL)
 """
+import datetime
 import json
 import re
 from typing import TYPE_CHECKING
@@ -71,7 +72,9 @@ Examples: "total sales by customer this month", "how many invoices submitted tod
   "filters": [["fieldname", "operator", "value"]],
   "date_range": {
     "field": "fieldname",
-    "preset": "this_month"
+    "preset": "this_month",
+    "from_date": "YYYY-MM-DD",
+    "to_date": "YYYY-MM-DD"
   },
   "order_by": "total_amount desc",
   "limit": 20
@@ -128,6 +131,9 @@ def generate_query_intent(
     schema_context: str,
     memory_context: str,
     llm_client: "LLMClient",
+    current_date: str | None = None,
+    current_day_name: str | None = None,
+    current_year: int | None = None,
     attempt: int = 0,
     previous_error: str | None = None,
     trace_metadata: dict | None = None,
@@ -152,6 +158,12 @@ def generate_query_intent(
     if schema_context:
         user_parts.append(f"## Available Schema\n{schema_context}\n")
 
+    resolved_date = current_date or frappe.utils.nowdate()
+    resolved_year = current_year or datetime.date.today().year
+    resolved_day_name = current_day_name or frappe.utils.get_datetime().strftime("%A")
+    user_parts.append(f"## Current Date\n{resolved_date}")
+    user_parts.append(f"## Current Day\n{resolved_day_name}")
+    user_parts.append(f"## Current Year\n{resolved_year}")
     user_parts.append(f"## Question\n{question}")
 
     if attempt > 0 and previous_error:
@@ -204,7 +216,6 @@ def _parse_intent(raw: str) -> dict:
         raise ValueError(f"Analytics intent missing 'metrics'. Raw: {raw!r}")
 
     return data
-
 
 def _extract_json_block(raw: str) -> str:
     """Strip Markdown fences and whitespace from the LLM response."""

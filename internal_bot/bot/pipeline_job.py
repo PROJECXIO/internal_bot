@@ -79,12 +79,16 @@ def run_pipeline_job(
         progress.emit_error(_bootstrap_state, user=user)
         return
 
+    current_dt = frappe.utils.get_datetime()
     initial_state = {
         "user": user,
         "raw_message": message.strip(),
         "session_name": session_name,
         "debug": bool(debug),
         "max_rows": settings.max_result_rows or 100,
+        "current_date": str(current_dt.date()),
+        "current_day_name": current_dt.strftime("%A"),
+        "current_year": current_dt.year,
         "start_time": time.monotonic(),
         "node_trace": [],
         "timing": {},

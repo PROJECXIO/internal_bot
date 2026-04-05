@@ -7,7 +7,7 @@ from collections import defaultdict
 
 import frappe
 
-from internal_bot.bot.services.text_normalizer import normalize_text
+from internal_bot.bot.services.text_normalizer import normalize_phrase_for_match, normalize_text
 
 _ALIAS_CACHE_KEY = "internal_bot:doctype_aliases:v1"
 _ALIAS_CACHE_TTL = 30 * 60
@@ -51,10 +51,13 @@ def _get_alias_payload() -> dict:
         doctype = (row.get("doctype_name") or "").strip()
         alias = (row.get("alias") or "").strip()
         normalized_alias = normalize_text(alias)
+        match_alias = normalize_phrase_for_match(alias)
         if not doctype or not alias or not normalized_alias:
             continue
         by_doctype[doctype].append(alias)
         alias_to_doctypes[normalized_alias].add(doctype)
+        if match_alias:
+            alias_to_doctypes[match_alias].add(doctype)
 
     index = {
         alias: next(iter(sorted(doctypes)))

@@ -221,3 +221,13 @@ class TestGenerateQueryIntent:
 		)
 		assert llm.chat_completion.call_args.kwargs["trace_metadata"] == {"node": "query_planner"}
 		assert llm.chat_completion.call_args.kwargs["trace_tags"] == ["internal_bot", "llm"]
+
+	def test_includes_current_calendar_context_in_prompt(self):
+		raw = '{"mode": "list", "doctype": "Customer", "fields": ["name"], "filters": [], "limit": 10}'
+		llm = _mock_llm(raw)
+		intent = generate_query_intent("show customers this year", "", "", llm)
+		assert intent["mode"] == "list"
+		user_message = llm.chat_completion.call_args[0][0][1]["content"]
+		assert "## Current Date" in user_message
+		assert "## Current Day" in user_message
+		assert "## Current Year" in user_message

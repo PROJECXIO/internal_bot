@@ -62,6 +62,23 @@ def normalize_text(text: str) -> str:
     return normalized.strip()
 
 
+def normalize_token_for_match(token: str) -> str:
+    normalized = normalize_text(token)
+    if normalized.startswith("ال") and len(normalized) > 3:
+        return normalized[2:]
+    return normalized
+
+
+def normalize_phrase_for_match(text: str) -> str:
+    normalized = normalize_text(text)
+    if not normalized:
+        return ""
+    return " ".join(normalize_token_for_match(token) for token in tokenize(normalized)).strip()
+
+
+MATCH_STOP_WORDS = STOP_WORDS | {normalize_token_for_match(word) for word in STOP_WORDS}
+
+
 def tokenize(text: str) -> list[str]:
     if not text:
         return []
@@ -74,5 +91,19 @@ def make_ngrams(tokens: list[str], n: int = 2) -> list[str]:
     return [" ".join(tokens[i : i + n]) for i in range(len(tokens) - n + 1)]
 
 
+def _stop_word_variants(token: str) -> set[str]:
+    normalized = normalize_text(token)
+    variants = {normalized, normalize_token_for_match(normalized)}
+    if normalized and normalized[0] in {"ب", "و", "ف", "ل", "ك"} and len(normalized) > 2:
+        stripped = normalized[1:]
+        variants.add(stripped)
+        variants.add(normalize_token_for_match(stripped))
+    return {variant for variant in variants if variant}
+
+
 def remove_stop_words(tokens: list[str]) -> list[str]:
-    return [token for token in tokens if normalize_text(token) not in STOP_WORDS]
+    return [
+        token
+        for token in tokens
+        if not any(variant in MATCH_STOP_WORDS for variant in _stop_word_variants(token))
+    ]

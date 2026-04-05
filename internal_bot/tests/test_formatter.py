@@ -218,6 +218,32 @@ class TestStructuredFormatter(FrappeTestCase):
 			"2025-09-16 is highest overall at 229,000 across 6 item code groups.",
 		)
 
+	def test_year_month_day_comparison_rows_support_grouped_bar_chart(self):
+		response = format_structured_response(
+			self._base_state(
+				[
+					{"YEAR(posting_date)": 2025, "MONTH(posting_date)": 2, "DAY(posting_date)": 12, "total_sales": 18000},
+					{"YEAR(posting_date)": 2026, "MONTH(posting_date)": 2, "DAY(posting_date)": 12, "total_sales": 15000},
+					{"YEAR(posting_date)": 2025, "MONTH(posting_date)": 3, "DAY(posting_date)": 3, "total_sales": 42000},
+					{"YEAR(posting_date)": 2026, "MONTH(posting_date)": 3, "DAY(posting_date)": 3, "total_sales": 67000},
+				],
+				message="compare daily sales invoices between this year and last year",
+			)
+		)
+
+		self.assertEqual(response["response_type"], "bar_chart")
+		self.assertEqual(response["visualization"]["kind"], "grouped_bar")
+		self.assertEqual(response["visualization"]["label_key"], "month_day")
+		self.assertEqual(response["visualization"]["series_key"], "YEAR(posting_date)")
+		self.assertEqual(response["visualization"]["categories"], ["02-12", "03-03"])
+		self.assertEqual(
+			response["visualization"]["series"],
+			[
+				{"name": "2025", "data": [18000.0, 42000.0]},
+				{"name": "2026", "data": [15000.0, 67000.0]},
+			],
+		)
+
 	def test_large_daily_item_sales_rows_still_support_grouped_bar_chart(self):
 		response = format_structured_response(
 			self._base_state(

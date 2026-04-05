@@ -121,6 +121,18 @@ def run(state: GraphState) -> dict:
 			# Include recent history so the LLM recognises clarification answers
 			history = (state.get("chat_history") or [])[-4:]
 			messages = [{"role": "system", "content": _INTENT_SYSTEM_PROMPT}]
+			if state.get("current_date") or state.get("current_day_name") or state.get("current_year"):
+				messages.append(
+					{
+						"role": "system",
+						"content": (
+							"Current request date context:\n"
+							f"- Date: {state.get('current_date') or ''}\n"
+							f"- Day: {state.get('current_day_name') or ''}\n"
+							f"- Year: {state.get('current_year') or ''}"
+						),
+					}
+				)
 			messages.extend({"role": m["role"], "content": m["content"]} for m in history)
 			if state.get("last_assistant_context_text"):
 				messages.append(

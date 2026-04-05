@@ -35,7 +35,7 @@ class TestSchemaDiscovery(FrappeTestCase):
 		invalidate_corpus_cache()
 
 	def tearDown(self):
-		frappe.db.delete("AI DocType Alias", {"alias": ["in", ["Schema Test Alias", "عميل اختبار"]]})
+		frappe.db.delete("AI DocType Alias", {"alias": ["in", ["Schema Test Alias", "عميل اختبار", "مبيعات"]]})
 		frappe.db.commit()
 		invalidate_alias_cache()
 		invalidate_corpus_cache()
@@ -158,6 +158,18 @@ class TestSchemaDiscovery(FrappeTestCase):
 
 		self.assertEqual(index.get("schema test alias"), "Customer")
 		self.assertIn("عميل اختبار", aliases)
+
+	def test_alias_service_indexes_arabic_article_normalized_aliases(self):
+		payload = {"doctype_name": "Sales Invoice", "alias": "مبيعات", "language": "ar"}
+		if not frappe.db.exists("AI DocType Alias", payload):
+			frappe.get_doc({"doctype": "AI DocType Alias", **payload}).insert(ignore_permissions=True)
+		frappe.db.commit()
+		invalidate_alias_cache()
+
+		index = get_alias_index()
+
+		self.assertEqual(index.get("مبيعات"), "Sales Invoice")
+		self.assertEqual(index.get("المبيعات"), "Sales Invoice")
 
 	def test_build_corpus_document_includes_aliases_and_tokens(self):
 		document = build_corpus_document(

@@ -85,6 +85,9 @@ def format_structured_response(state: "GraphState") -> dict:
 		response["debug"] = {
 			"normalized_question": state.get("normalized_question"),
 			"discovered_entities": state.get("discovered_doctypes", []),
+			"schema_confidence": state.get("schema_confidence"),
+			"schema_decision": state.get("schema_decision"),
+			"schema_candidates": state.get("schema_candidates", []),
 			"generated_intent": state.get("generated_intent"),
 			"compiled_sql": state.get("compiled_sql"),
 			"retries": state.get("query_generation_attempts", 0),

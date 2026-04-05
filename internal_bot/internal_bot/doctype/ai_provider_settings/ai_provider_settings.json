@@ -6,6 +6,7 @@
  "field_order": [
   "provider",
   "model",
+  "embedding_model",
   "api_key",
   "api_base",
   "api_version",
@@ -40,6 +41,12 @@
    "in_list_view": 1,
    "label": "Model",
    "reqd": 1
+  },
+  {
+   "fieldname": "embedding_model",
+   "fieldtype": "Data",
+   "label": "Embedding Model",
+   "description": "Optional separate model for embeddings. If empty, a provider-based default is used."
   },
   {
    "fieldname": "api_key",

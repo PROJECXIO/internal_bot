@@ -1,47 +1,18 @@
 """
 Node 3 — Schema Discovery
 
-Extracts keywords from the normalized question, discovers relevant
-DocTypes (permission-gated), fetches their permitted fields and links,
-and builds a Markdown schema context string for the query planner.
-
-Permission gates applied here:
-  Gate 1 — DocType access: only DocTypes the user can read are surfaced.
-  Gate 2 — Field visibility: only fields the user can see are included.
-
-Sample rows are intentionally excluded (they could expose real data to the LLM).
+Hybrid schema retrieval using multilingual normalization, aliases,
+lexical overlap, and optional embeddings.
 """
-import re
 import time
 
 import frappe
 
 from internal_bot.bot.services import schema as schema_svc
+from internal_bot.bot.services import hybrid_scorer, schema_corpus
+from internal_bot.bot.services.text_normalizer import normalize_text, remove_stop_words, tokenize
 from internal_bot.bot.state import GraphState
 from internal_bot.bot import progress, trace
-
-
-# Common ERP stop words to ignore during keyword extraction.
-# Includes generic English words that happen to match ERP DocType names
-# but carry no entity-selection meaning in a query (e.g. "period", "summary").
-_STOP_WORDS = {
-    # Articles / prepositions / conjunctions
-    "show", "me", "all", "the", "a", "an", "of", "in", "for", "and",
-    "or", "is", "are", "was", "were", "what", "how", "by", "from",
-    "to", "with", "on", "at", "between", "about", "into", "over",
-    # Question / action words
-    "give", "get", "find", "fetch", "list", "tell", "display", "return",
-    # Time words (match too many DocTypes with "Period", "Date", etc.)
-    "today", "yesterday", "last", "this", "month", "year", "week",
-    "date", "time", "per", "each", "every", "day", "days", "period",
-    "latest", "recent", "current", "previous", "past", "next",
-    # Aggregation words
-    "total", "count", "number", "num", "many", "sum", "average", "avg",
-    # Generic report/query words that don't map to a DocType
-    "summary", "report", "overview", "analysis", "breakdown", "detail",
-    "details", "data", "info", "information", "record", "records",
-    "result", "results", "figure", "figures",
-}
 
 
 def run(state: GraphState) -> dict:
@@ -53,50 +24,65 @@ def run(state: GraphState) -> dict:
 
     user = state.get("user") or frappe.session.user
     question = state.get("normalized_question") or state.get("raw_message", "")
+    llm_client = state.get("_llm_client")
     settings = state.get("_settings")
-    blocked = settings.get_blocked_doctype_list() if settings else []
+    blocked = set(settings.get_blocked_doctype_list() if settings else [])
+    normalized_question = normalize_text(question)
+    query_tokens = remove_stop_words(tokenize(normalized_question))
+    trace.detail(state, "Normalized question", normalized_question)
+    trace.detail(state, "Query tokens", query_tokens)
 
-    keywords = _extract_keywords(question)
-    trace.detail(state, "Keywords", keywords)
-
-    if not keywords and not state.get("follow_up_to_previous_result"):
+    if not query_tokens and not state.get("follow_up_to_previous_result"):
         return _update(state, node_name, t0, {
             "discovered_doctypes": [],
             "schema_context": "",
+            "schema_confidence": 0.0,
+            "schema_decision": "no_match",
+            "schema_candidates": [],
         }, log_t0)
 
-    # Gate 1: discover_permitted_doctypes filters by frappe.has_permission
-    discovered_rows = schema_svc.discover_permitted_doctypes(keywords, user, blocked)
-    # Re-rank by match quality so the most relevant DocType isn't cut off by the cap
-    discovered_rows = _rank_by_relevance(discovered_rows, keywords)
+    corpus = schema_corpus.get_corpus(blocked)
+    if llm_client:
+        corpus = schema_corpus.compute_and_cache_embeddings(corpus, llm_client)
+
+    query_embedding = None
+    if llm_client:
+        embedding_result = llm_client.create_embeddings([question])
+        if embedding_result and isinstance(embedding_result, list):
+            first_embedding = embedding_result[0] if embedding_result else None
+            if isinstance(first_embedding, list):
+                query_embedding = first_embedding
+
+    candidates = hybrid_scorer.rank_candidates(
+        query=question,
+        corpus=corpus,
+        user=user,
+        blocked=blocked,
+        query_embedding=query_embedding,
+    )
+    decision, selected_candidates = hybrid_scorer.classify_confidence(candidates)
     previous_doctypes = set(state.get("last_discovered_doctypes") or [])
+    if previous_doctypes and decision in ("ambiguous", "low_confidence"):
+        preferred = next(
+            (candidate for candidate in selected_candidates if candidate.doctype_name in previous_doctypes),
+            None,
+        )
+        if preferred:
+            selected_candidates = [preferred]
+            decision = "clear_winner"
+            trace.detail(state, "Preferring previous doctype", preferred.doctype_name)
 
-    if previous_doctypes and len(discovered_rows) > 1:
-        matching_previous = [row for row in discovered_rows if row["name"] in previous_doctypes]
-        if matching_previous:
-            discovered_rows = matching_previous
-            trace.detail(state, "Preferring previous doctypes", [row["name"] for row in discovered_rows])
-
-    if not discovered_rows and state.get("follow_up_to_previous_result"):
-        discovered_rows = [{"name": name} for name in previous_doctypes]
-        trace.detail(state, "Reusing previous doctypes", [row["name"] for row in discovered_rows])
-
-    # If a keyword exactly matches a DocType name (case-insensitive), narrow to
-    # just that one — no need for clarification.  Check bigrams first (longer =
-    # more specific) because keywords list has unigrams then bigrams.
-    discovered_by_lower = {r["name"].lower(): r for r in discovered_rows}
-    for kw in reversed(keywords):
-        if kw in discovered_by_lower:
-            discovered_rows = [discovered_by_lower[kw]]
-            break
-
-    discovered_names = [r["name"] for r in discovered_rows]
-    trace.detail(state, "Discovered doctypes", discovered_names[:5])
+    discovered_names = [candidate.doctype_name for candidate in selected_candidates]
+    trace.detail(state, "Schema decision", decision)
+    trace.detail(
+        state,
+        "Schema candidates",
+        [f"{candidate.doctype_name}:{candidate.final_score}" for candidate in candidates[:5]],
+    )
 
     # Enrich each discovered DocType with permission-filtered fields and links
     enriched = []
-    for row in discovered_rows[:5]:  # cap at 5 DocTypes to keep prompt size manageable
-        name = row["name"]
+    for name in discovered_names[:5]:
         try:
             # Gate 2: get_doctype_fields with user strips permlevel-restricted fields
             fields = schema_svc.get_doctype_fields(name, user=user)
@@ -111,34 +97,19 @@ def run(state: GraphState) -> dict:
         })
 
     schema_ctx = schema_svc.build_schema_context(enriched)
+    schema_confidence = round(selected_candidates[0].final_score, 4) if selected_candidates else 0.0
+    schema_candidates = [
+        (candidate.doctype_name, round(candidate.final_score, 4))
+        for candidate in candidates[:5]
+    ]
 
     return _update(state, node_name, t0, {
         "discovered_doctypes": discovered_names,
         "schema_context": schema_ctx,
+        "schema_confidence": schema_confidence,
+        "schema_decision": decision,
+        "schema_candidates": schema_candidates,
     }, log_t0)
-
-
-def _rank_by_relevance(rows: list, keywords: list) -> list:
-    """
-    Sort discovered DocTypes so the closest keyword match comes first.
-    Score = length of the longest keyword that appears in the lowercased name.
-    A longer keyword match (e.g. bigram "sales invoice") is more specific than
-    a short unigram match (e.g. "invoice"), so it ranks higher.
-    """
-    def score(row):
-        name_lower = row["name"].lower()
-        return max((len(kw) for kw in keywords if kw in name_lower), default=0)
-
-    return sorted(rows, key=score, reverse=True)
-
-
-def _extract_keywords(question: str) -> list:
-    """Extract meaningful noun-like tokens from the question."""
-    words = re.findall(r"[a-z]+", question.lower())
-    keywords = list(dict.fromkeys(w for w in words if w not in _STOP_WORDS and len(w) > 2))
-    # Also add 2-gram combinations (e.g. "sales invoice", "purchase order")
-    bigrams = [f"{keywords[i]} {keywords[i+1]}" for i in range(len(keywords) - 1)]
-    return list(dict.fromkeys(keywords + bigrams))  # deduplicate, preserve order
 
 
 def _update(state: GraphState, node_name: str, t0: float, updates: dict, log_t0: float) -> dict:

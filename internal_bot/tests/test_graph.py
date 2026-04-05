@@ -9,6 +9,9 @@ from frappe.tests.utils import FrappeTestCase
 from unittest.mock import MagicMock, patch
 
 from internal_bot.bot.graph import get_graph, reset_graph
+from internal_bot.bot.services.doctype_aliases import invalidate_alias_cache
+from internal_bot.bot.services.hybrid_scorer import ScoredCandidate
+from internal_bot.bot.services.schema_corpus import invalidate_corpus_cache
 from internal_bot.bot.state import GraphState
 
 _TEST_USER = "Administrator"
@@ -25,13 +28,14 @@ def _make_mock_llm(responses: list[str]):
 
 	_iter = iter(responses)
 
-	def _side_effect(messages, temperature=0.0, max_tokens=2000):
+	def _side_effect(messages, temperature=0.0, max_tokens=2000, **kwargs):
 		try:
 			return next(_iter)
 		except StopIteration:
 			return responses[-1]  # Repeat last response
 
 	client.chat_completion.side_effect = _side_effect
+	client.create_embeddings.return_value = None
 	return client
 
 
@@ -103,8 +107,29 @@ class TestGraphIntegration(FrappeTestCase):
 	def tearDown(self):
 		frappe.db.delete("AI Chat Message", {"session": _TEST_SESSION})
 		frappe.db.set_value("AI Chat Session", _TEST_SESSION, "total_messages", 0)
+		frappe.db.delete(
+			"AI DocType Alias",
+			{"alias": ["in", ["فاتورة مبيعات", "عميل", "invoices"]]},
+		)
 		frappe.db.commit()
+		invalidate_alias_cache()
+		invalidate_corpus_cache()
 		reset_graph()
+
+	def _ensure_alias(self, doctype_name: str, alias: str, language: str):
+		if frappe.db.exists("AI DocType Alias", {"doctype_name": doctype_name, "alias": alias}):
+			return
+		frappe.get_doc(
+			{
+				"doctype": "AI DocType Alias",
+				"doctype_name": doctype_name,
+				"alias": alias,
+				"language": language,
+			}
+		).insert(ignore_permissions=True)
+		frappe.db.commit()
+		invalidate_alias_cache()
+		invalidate_corpus_cache()
 
 	# ── Blocked intent ────────────────────────────────────────────────
 
@@ -433,3 +458,69 @@ class TestGraphIntegration(FrappeTestCase):
 		self.assertTrue(result["follow_up_to_previous_result"])
 		self.assertEqual(result["discovered_doctypes"], ["Sales Invoice"])
 		self.assertEqual(result["formatted_response"]["status"], "success")
+
+	def test_arabic_direct_alias_resolves_sales_invoice_without_embeddings(self):
+		self._ensure_alias("Sales Invoice", "فاتورة مبيعات", "ar")
+		intent_response = '{"intent": "query", "normalized_question": "فاتورة مبيعات", "reason": "", "clarification_options": []}'
+		llm = _make_mock_llm([intent_response, _LIST_INTENT, _VIZ_TEXT, _ANSWER_MARKDOWN])
+		state = _base_state("فاتورة مبيعات", llm_client=llm)
+		graph = get_graph()
+
+		with patch("internal_bot.bot.nodes.query_planner.query_executor") as mock_qe, \
+		     patch("internal_bot.bot.nodes.query_planner.permission_service") as mock_perm:
+			mock_perm.check_doctype_read_access.return_value = True
+			mock_qe.execute_query_intent.return_value = ([{"name": "SINV-0001"}], None)
+			result = graph.invoke(state)
+
+		self.assertEqual(result["schema_decision"], "clear_winner")
+		self.assertEqual(result["discovered_doctypes"], ["Sales Invoice"])
+		self.assertEqual(result["formatted_response"]["status"], "success")
+
+	def test_arabic_indirect_alias_resolves_customer(self):
+		self._ensure_alias("Customer", "عميل", "ar")
+		intent_response = '{"intent": "query", "normalized_question": "كم عميل عندي", "reason": "", "clarification_options": []}'
+		llm = _make_mock_llm([intent_response, _LIST_INTENT, _VIZ_TEXT, _ANSWER_MARKDOWN])
+		state = _base_state("كم عميل عندي", llm_client=llm)
+		graph = get_graph()
+
+		with patch("internal_bot.bot.nodes.query_planner.query_executor") as mock_qe, \
+		     patch("internal_bot.bot.nodes.query_planner.permission_service") as mock_perm:
+			mock_perm.check_doctype_read_access.return_value = True
+			mock_qe.execute_query_intent.return_value = ([{"name": "CUST-0001"}], None)
+			result = graph.invoke(state)
+
+		self.assertEqual(result["discovered_doctypes"], ["Customer"])
+		self.assertEqual(result["formatted_response"]["status"], "success")
+
+	def test_ambiguous_invoice_query_routes_to_clarification(self):
+		self._ensure_alias("Sales Invoice", "invoices", "en")
+		self._ensure_alias("Purchase Invoice", "invoices", "en")
+		intent_response = '{"intent": "query", "normalized_question": "invoices", "reason": "", "clarification_options": []}'
+		clarification_response = '{"ready": false, "question": "Which invoice type do you mean?", "options": ["Sales Invoice", "Purchase Invoice"]}'
+		llm = _make_mock_llm([intent_response, clarification_response])
+		state = _base_state("invoices", llm_client=llm)
+		graph = get_graph()
+		result = graph.invoke(state)
+
+		self.assertEqual(result["schema_decision"], "ambiguous")
+		self.assertEqual(result["formatted_response"]["status"], "clarification_needed")
+		self.assertIn("Sales Invoice", result["formatted_response"]["options"])
+		self.assertIn("Purchase Invoice", result["formatted_response"]["options"])
+
+	def test_no_match_formatter_uses_ranked_candidates(self):
+		intent_response = '{"intent": "query", "normalized_question": "thing from accounting", "reason": "", "clarification_options": []}'
+		llm = _make_mock_llm([intent_response])
+		state = _base_state("thing from accounting", llm_client=llm)
+		graph = get_graph()
+
+		with patch("internal_bot.bot.nodes.schema_discovery.hybrid_scorer.rank_candidates") as mock_rank, \
+		     patch("internal_bot.bot.nodes.schema_discovery.hybrid_scorer.classify_confidence") as mock_classify:
+			mock_rank.return_value = [
+				ScoredCandidate("Journal Entry", 0.05, 0.0, 0.05, "weak overlap"),
+				ScoredCandidate("Payment Entry", 0.04, 0.0, 0.04, "weak overlap"),
+			]
+			mock_classify.return_value = ("no_match", [])
+			result = graph.invoke(state)
+
+		self.assertEqual(result["formatted_response"]["status"], "clarification_needed")
+		self.assertEqual(result["formatted_response"]["options"], ["Journal Entry", "Payment Entry"])

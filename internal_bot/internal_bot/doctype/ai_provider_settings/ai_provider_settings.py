@@ -15,6 +15,7 @@ class AIProviderSettings(Document):
 	api_version: DF.Data | None
 	blocked_doctypes: DF.SmallText | None
 	cache_ttl_hours: DF.Int
+	embedding_model: DF.Data | None
 	enable_cache: DF.Check
 	enable_debug_context_window: DF.Check
 	max_result_rows: DF.Int
@@ -87,6 +88,61 @@ def test_connection():
 		}
 	except Exception as exc:
 		return {"success": False, "message": str(exc), "model": client.model, "latency_ms": None}
+
+
+@frappe.whitelist()
+def test_embeddings():
+	"""Send a minimal embeddings request using the configured embedding model."""
+	from internal_bot.bot.services.llm_client import get_llm_client
+
+	try:
+		client = get_llm_client()
+	except Exception as exc:
+		return {
+			"success": False,
+			"message": f"Could not build client: {exc}",
+			"embedding_model": None,
+			"latency_ms": None,
+			"dimensions": None,
+		}
+
+	if not client.embedding_model:
+		return {
+			"success": False,
+			"message": "No embedding model is configured for the current provider.",
+			"embedding_model": None,
+			"latency_ms": None,
+			"dimensions": None,
+		}
+
+	try:
+		t0 = time.monotonic()
+		result = client.create_embeddings(["test embedding connection"])
+		latency_ms = round((time.monotonic() - t0) * 1000)
+		if not result or not result[0]:
+			return {
+				"success": False,
+				"message": "Embedding request returned no vectors.",
+				"embedding_model": client.embedding_model,
+				"latency_ms": latency_ms,
+				"dimensions": None,
+			}
+
+		return {
+			"success": True,
+			"message": "Embeddings request succeeded.",
+			"embedding_model": client.embedding_model,
+			"latency_ms": latency_ms,
+			"dimensions": len(result[0]),
+		}
+	except Exception as exc:
+		return {
+			"success": False,
+			"message": str(exc),
+			"embedding_model": client.embedding_model,
+			"latency_ms": None,
+			"dimensions": None,
+		}
 
 
 @frappe.whitelist()

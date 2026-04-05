@@ -67,10 +67,11 @@ _PERIOD_PLACEHOLDERS = ("for a period", "for some period", "during a period", "f
 
 def _route_after_schema(state: GraphState) -> str:
     discovered = state.get("discovered_doctypes") or []
-    if not discovered:
+    decision = state.get("schema_decision", "")
+    if not discovered or decision == "no_match":
         trace.route(state, "result_formatter")
         return "no_schema"
-    if len(discovered) > 1:
+    if decision in ("ambiguous", "low_confidence"):
         trace.route(state, "clarification_planner")
         return "needs_clarification"
     # Single DocType resolved, but check if the question has a vague period

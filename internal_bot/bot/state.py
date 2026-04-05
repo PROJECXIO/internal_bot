@@ -34,6 +34,9 @@ class GraphState(TypedDict, total=False):
     # ── Node 3: Schema Discovery ─────────────────────────────────────
     discovered_doctypes: list   # ["Sales Invoice", "Customer", ...]
     schema_context: str         # Markdown-formatted schema for LLM prompt
+    schema_confidence: float
+    schema_decision: str
+    schema_candidates: list
 
     # ── Node: Clarification Planner ──────────────────────────────────
     ready_to_query: bool         # True = proceed to query_planner

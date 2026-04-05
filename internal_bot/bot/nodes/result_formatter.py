@@ -29,16 +29,18 @@ def run(state: GraphState) -> dict:
 
 	# No matching DocTypes were found — tell the user immediately
 	elif not state.get("discovered_doctypes") and state.get("intent") == "query":
+		candidates = state.get("schema_candidates") or []
+		options = [candidate[0] for candidate in candidates[:5]]
+		question_text = (
+			"I found some possible matches. Did you mean one of these?"
+			if options
+			else "I couldn't find matching data. Could you specify what type of document you're looking for?"
+		)
 		formatted = {
 			"status": "clarification_needed",
-			"question": (
-				"I couldn't find any relevant data for your question. "
-				"Could you rephrase it or be more specific about what you're looking for?"
-			),
-			"markdown": (
-				"I couldn't find any relevant data for your question. "
-				"Could you rephrase it or be more specific about what you're looking for?"
-			),
+			"question": question_text,
+			"options": options,
+			"markdown": question_text,
 		}
 	else:
 		formatted = format_structured_response(state)

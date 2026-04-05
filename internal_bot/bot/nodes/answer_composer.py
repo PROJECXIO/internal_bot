@@ -81,7 +81,12 @@ def run(state: GraphState) -> dict:
 		preview_response = format_structured_response({**state, "answer_markdown": state.get("answer_markdown") or ""})
 		response_type = preview_response.get("response_type")
 		preview_visualization = preview_response.get("visualization") or {}
-		row_limit = 25 if analysis_mode else 8 if response_type in {"bar_chart", "pie_chart", "table"} else 3
+		row_limit = _determine_row_limit(
+			row_count=len(rows),
+			response_type=response_type,
+			visualization_kind=preview_visualization.get("kind"),
+			analysis_mode=analysis_mode,
+		)
 		data_rows = _serialize_rows(rows[:row_limit])
 		user_content = json.dumps(
 			{
@@ -89,6 +94,7 @@ def run(state: GraphState) -> dict:
 				"analysis_mode": analysis_mode,
 				"response_type": response_type,
 				"visualization_kind": preview_visualization.get("kind"),
+				"visualization_layout": preview_visualization.get("layout"),
 				"title": preview_response.get("title") or state.get("normalized_question") or state.get("raw_message", ""),
 				"columns": list(rows[0].keys()) if rows else [],
 				"row_count": len(rows),
@@ -233,11 +239,28 @@ def _serialize_rows(rows: list[dict]) -> list[dict]:
 	return result
 
 
+def _determine_row_limit(
+	row_count: int,
+	response_type: str | None,
+	visualization_kind: str | None,
+	analysis_mode: bool,
+) -> int:
+	if analysis_mode:
+		return min(row_count, 25)
+	if visualization_kind == "grouped_bar":
+		return min(row_count, 25)
+	if response_type in {"bar_chart", "pie_chart", "table"}:
+		return min(row_count, 8)
+	return min(row_count, 3)
+
+
 def _build_analysis_hints(rows: list[dict]) -> dict:
 	if not rows:
 		return {}
 
 	columns = list(rows[0].keys())
+	if len(columns) == 3:
+		return _build_grouped_analysis_hints(rows, columns)
 	if len(columns) != 2:
 		return {}
 
@@ -272,6 +295,75 @@ def _build_analysis_hints(rows: list[dict]) -> dict:
 		"min_value": min_row.get(value_column),
 		"top_share_percent": top_share,
 	}
+
+
+def _build_grouped_analysis_hints(rows: list[dict], columns: list[str]) -> dict:
+	value_column = next((column for column in columns if _is_numeric_column(rows, column)), None)
+	if not value_column:
+		return {}
+
+	dimension_columns = [column for column in columns if column != value_column]
+	if len(dimension_columns) != 2:
+		return {}
+
+	label_column, series_column = _pick_grouped_hint_keys(rows, dimension_columns)
+	values = [float(row.get(value_column)) for row in rows if _is_numeric_value(row.get(value_column))]
+	if len(values) < 2:
+		return {}
+
+	max_row = max(rows, key=lambda row: float(row.get(value_column) or 0))
+	min_row = min(rows, key=lambda row: float(row.get(value_column) or 0))
+	total = sum(values)
+	mean = total / len(values)
+	median_value = median(values)
+	top_share = round((float(max_row.get(value_column) or 0) / total) * 100, 1) if total else 0
+
+	category_totals: dict[str, float] = {}
+	series_totals: dict[str, float] = {}
+	for row in rows:
+		category_label = row.get(label_column)
+		series_label = row.get(series_column)
+		value = row.get(value_column)
+		if category_label in (None, "") or series_label in (None, "") or not _is_numeric_value(value):
+			continue
+
+		category_key = str(category_label)
+		series_key = str(series_label)
+		value_number = float(value)
+		category_totals[category_key] = category_totals.get(category_key, 0.0) + value_number
+		series_totals[series_key] = series_totals.get(series_key, 0.0) + value_number
+
+	top_category = max(category_totals.items(), key=lambda item: item[1]) if category_totals else None
+	top_series = max(series_totals.items(), key=lambda item: item[1]) if series_totals else None
+
+	return {
+		"shape": "grouped_long_form",
+		"label_column": label_column,
+		"series_column": series_column,
+		"value_column": value_column,
+		"total": round(total, 2),
+		"average": round(mean, 2),
+		"median": round(median_value, 2),
+		"max_label": max_row.get(label_column),
+		"max_series": max_row.get(series_column),
+		"max_value": max_row.get(value_column),
+		"min_label": min_row.get(label_column),
+		"min_series": min_row.get(series_column),
+		"min_value": min_row.get(value_column),
+		"top_share_percent": top_share,
+		"top_category_label": top_category[0] if top_category else None,
+		"top_category_total": round(top_category[1], 2) if top_category else None,
+		"top_series_label": top_series[0] if top_series else None,
+		"top_series_total": round(top_series[1], 2) if top_series else None,
+	}
+
+
+def _pick_grouped_hint_keys(rows: list[dict], dimension_columns: list[str]) -> tuple[str, str]:
+	date_key = next((column for column in dimension_columns if _is_date_like_column(rows, column)), None)
+	if date_key:
+		other_key = next(column for column in dimension_columns if column != date_key)
+		return date_key, other_key
+	return dimension_columns[0], dimension_columns[1]
 
 
 def _build_analysis_fallback(rows: list[dict]) -> str:
@@ -332,6 +424,16 @@ def _count_numeric_value(rows: list[dict], column: str, target) -> int:
 		if _is_numeric_value(value) and float(value) == target_number:
 			count += 1
 	return count
+
+
+def _is_date_like_column(rows: list[dict], column: str) -> bool:
+	column_name = (column or "").lower()
+	if "date" in column_name:
+		return True
+
+	pattern = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+	values = [row.get(column) for row in rows if row.get(column) not in (None, "")]
+	return bool(values) and all(isinstance(value, str) and pattern.match(value) for value in values)
 
 
 def _format_number(value) -> str:

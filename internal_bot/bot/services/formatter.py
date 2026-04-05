@@ -381,7 +381,17 @@ def _build_chart_visualization(rows: list[dict], columns: list[str], title: str,
 	if preference not in {"bar", "pie", "auto"}:
 		return None
 
-	if len(rows) < 2 or len(rows) > 12 or len(columns) != 2:
+	if len(rows) < 2 or len(columns) < 2:
+		return None
+
+	grouped_payload = _build_grouped_chart_visualization(rows, columns, title, preference)
+	if grouped_payload:
+		return grouped_payload
+
+	if len(rows) > 12:
+		return None
+
+	if len(columns) != 2:
 		return None
 
 	label_key, value_key = _pick_chart_axes(rows, columns)
@@ -411,6 +421,7 @@ def _build_chart_visualization(rows: list[dict], columns: list[str], title: str,
 		"kind": kind,
 		"label_key": label_key,
 		"value_key": value_key,
+		"layout": _detect_bar_layout(title),
 		"series": [{"name": value_key.replace("_", " ").title(), "data": values}],
 		"categories": categories,
 		"show_table_toggle": True,
@@ -422,6 +433,124 @@ def _build_chart_visualization(rows: list[dict], columns: list[str], title: str,
 		"response_type": response_type,
 		"visualization": visualization,
 		"summary": _summarize_chart(categories, values, value_key, kind),
+	}
+
+
+def _build_grouped_chart_visualization(rows: list[dict], columns: list[str], title: str, preference: str) -> dict | None:
+	if len(columns) < 3 or len(columns) > 6:
+		return None
+	if preference != "bar" and not _should_auto_use_grouped_chart(title):
+		return None
+
+	long_form_grouped_chart = _build_long_form_grouped_chart(rows, columns, title)
+	if long_form_grouped_chart:
+		return long_form_grouped_chart
+
+	label_key = next((column for column in columns if not _is_numeric_column(rows, column)), None)
+	if not label_key:
+		return None
+
+	numeric_keys = [column for column in columns if column != label_key and _is_numeric_column(rows, column)]
+	label_columns = [column for column in columns if column not in numeric_keys]
+	if len(numeric_keys) < 2 or len(label_columns) != 1:
+		return None
+
+	categories = []
+	series = []
+	for metric_key in numeric_keys:
+		series.append({
+			"name": metric_key.replace("_", " ").title(),
+			"data": [],
+		})
+
+	for row in rows:
+		label = row.get(label_key)
+		if label in (None, ""):
+			return None
+
+		categories.append(str(label))
+		for index, metric_key in enumerate(numeric_keys):
+			value = row.get(metric_key)
+			if not _is_numeric_value(value):
+				return None
+			series[index]["data"].append(float(value))
+
+	if not any(any(value != 0 for value in metric["data"]) for metric in series):
+		return None
+
+	return {
+		"response_type": "bar_chart",
+		"visualization": {
+			"kind": "grouped_bar",
+			"layout": _detect_bar_layout(title),
+			"label_key": label_key,
+			"value_keys": numeric_keys,
+			"series": series,
+			"categories": categories,
+			"show_table_toggle": True,
+		},
+		"summary": _summarize_grouped_chart(categories, numeric_keys, series),
+	}
+
+
+def _build_long_form_grouped_chart(rows: list[dict], columns: list[str], title: str) -> dict | None:
+	if len(columns) != 3:
+		return None
+
+	numeric_keys = [column for column in columns if _is_numeric_column(rows, column)]
+	if len(numeric_keys) != 1:
+		return None
+
+	value_key = numeric_keys[0]
+	dimension_keys = [column for column in columns if column != value_key]
+	if len(dimension_keys) != 2:
+		return None
+
+	label_key, series_key = _pick_long_form_grouping_keys(rows, dimension_keys, title)
+	categories: list[str] = []
+	series_names: list[str] = []
+	values_by_series_and_category: dict[str, dict[str, float]] = {}
+
+	for row in rows:
+		category = row.get(label_key)
+		series_name = row.get(series_key)
+		value = row.get(value_key)
+		if category in (None, "") or series_name in (None, "") or not _is_numeric_value(value):
+			return None
+
+		category_label = str(category)
+		series_label = str(series_name)
+		if category_label not in categories:
+			categories.append(category_label)
+		if series_label not in series_names:
+			series_names.append(series_label)
+
+		series_values = values_by_series_and_category.setdefault(series_label, {})
+		series_values[category_label] = series_values.get(category_label, 0.0) + float(value)
+
+	series = [
+		{
+			"name": series_name,
+			"data": [values_by_series_and_category.get(series_name, {}).get(category, 0.0) for category in categories],
+		}
+		for series_name in series_names
+	]
+	if not any(any(value != 0 for value in metric["data"]) for metric in series):
+		return None
+
+	return {
+		"response_type": "bar_chart",
+		"visualization": {
+			"kind": "grouped_bar",
+			"layout": _detect_bar_layout(title),
+			"label_key": label_key,
+			"series_key": series_key,
+			"value_key": value_key,
+			"series": series,
+			"categories": categories,
+			"show_table_toggle": True,
+		},
+		"summary": _summarize_long_form_grouped_chart(categories, series_names, series, series_key),
 	}
 
 
@@ -457,6 +586,56 @@ def _pick_chart_axes(rows: list[dict], columns: list[str]) -> tuple[str | None, 
 	if second_numeric and not first_numeric:
 		return first, second
 	return None, None
+
+
+def _is_numeric_column(rows: list[dict], column: str) -> bool:
+	values = [row.get(column) for row in rows]
+	return bool(values) and all(_is_numeric_value(value) for value in values)
+
+
+def _detect_bar_layout(title: str) -> str:
+	title_text = (title or "").lower()
+	if "horizontal" in title_text or "grouped bar" in title_text:
+		return "horizontal"
+	return "vertical"
+
+
+def _pick_long_form_grouping_keys(rows: list[dict], dimension_keys: list[str], title: str) -> tuple[str, str]:
+	title_text = (title or "").lower()
+	if any(keyword in title_text for keyword in ("per day", "by day", "daily", "per date", "by date")):
+		date_key = next((column for column in dimension_keys if _is_date_like_column(rows, column)), None)
+		if date_key:
+			other_key = next(column for column in dimension_keys if column != date_key)
+			return date_key, other_key
+
+	return dimension_keys[0], dimension_keys[1]
+
+
+def _is_date_like_column(rows: list[dict], column: str) -> bool:
+	column_name = (column or "").lower()
+	if "date" in column_name:
+		return True
+
+	pattern = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+	values = [row.get(column) for row in rows]
+	non_empty_values = [value for value in values if value not in (None, "")]
+	return bool(non_empty_values) and all(isinstance(value, str) and pattern.match(value) for value in non_empty_values)
+
+
+def _should_auto_use_grouped_chart(title: str) -> bool:
+	title_text = (title or "").lower()
+	return any(
+		keyword in title_text
+		for keyword in (
+			"grouped",
+			"compare",
+			"comparison",
+			"versus",
+			" vs ",
+			"chart",
+			"graph",
+		)
+	)
 
 
 def _should_use_pie_chart(preference: str, title: str, values: Sequence[float]) -> bool:
@@ -513,6 +692,38 @@ def _summarize_chart(categories: Sequence[str], values: Sequence[float], value_k
 	return f"{leader} is highest at {leader_value} {value_key.replace('_', ' ')}."
 
 
+def _summarize_grouped_chart(categories: Sequence[str], value_keys: Sequence[str], series: Sequence[dict]) -> str:
+	category_totals = []
+	for category_index, category in enumerate(categories):
+		total = sum(float(metric["data"][category_index]) for metric in series)
+		category_totals.append((category, total))
+
+	leader, leader_total = max(category_totals, key=lambda item: item[1])
+	return (
+		f"{leader} is highest overall at {_format_metric_value(leader_total)} across "
+		f"{len(value_keys)} metrics."
+	)
+
+
+def _summarize_long_form_grouped_chart(
+	categories: Sequence[str],
+	series_names: Sequence[str],
+	series: Sequence[dict],
+	series_key: str,
+) -> str:
+	category_totals = []
+	for category_index, category in enumerate(categories):
+		total = sum(float(metric["data"][category_index]) for metric in series)
+		category_totals.append((category, total))
+
+	leader, leader_total = max(category_totals, key=lambda item: item[1])
+	series_label = _humanize_column_label(series_key)
+	return (
+		f"{leader} is highest overall at {_format_metric_value(leader_total)} across "
+		f"{len(series_names)} {series_label} groups."
+	)
+
+
 def _summarize_table(rows: list[dict], columns: list[str]) -> str:
 	row_count = len(rows)
 	column_count = len(columns)
@@ -532,3 +743,8 @@ def _format_metric_value(value: Any) -> str:
 		return f"{int(number):,}"
 
 	return f"{number:,.2f}".rstrip("0").rstrip(".")
+
+
+def _humanize_column_label(column: str) -> str:
+	label = re.sub(r"^[A-Z]+\((.+)\)$", r"\1", column or "")
+	return label.replace("_", " ").strip().lower() or "series"

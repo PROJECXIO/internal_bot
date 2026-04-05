@@ -206,6 +206,46 @@ class TestChatAPI(FrappeTestCase):
 		self.assertEqual(response["visualization"]["kind"], "bar")
 		self.assertEqual(response["markdown"], "- West leads.\n- East follows.")
 
+	def test_grouped_bar_visual_payload_passes_through(self):
+		fake_response = {
+			"status": "success",
+			"response_type": "bar_chart",
+			"visualization": {
+				"kind": "grouped_bar",
+				"layout": "vertical",
+				"label_key": "territory",
+				"value_keys": ["total_sales", "total_orders"],
+				"series": [
+					{"name": "Total Sales", "data": [1200, 950]},
+					{"name": "Total Orders", "data": [25, 18]},
+				],
+				"categories": ["West", "East"],
+				"show_table_toggle": True,
+			},
+			"summary": "West is highest overall at 1,225 across 2 metrics.",
+			"markdown": "- **West** leads on both metrics.",
+			"title": "Sales and Orders by Territory",
+			"columns": ["territory", "total_sales", "total_orders"],
+			"rows": [
+				{"territory": "West", "total_sales": 1200, "total_orders": 25},
+				{"territory": "East", "total_sales": 950, "total_orders": 18},
+			],
+			"meta": {"confidence": 0.95, "has_more": False, "returned_rows": 2},
+		}
+
+		with patch("internal_bot.api.chat.get_graph") as mock_get_graph:
+			mock_graph = MagicMock()
+			mock_graph.invoke.return_value = {"formatted_response": fake_response}
+			mock_get_graph.return_value = mock_graph
+
+			with patch("internal_bot.api.chat.get_llm_client") as mock_llm_factory:
+				mock_llm_factory.return_value = MagicMock()
+				response = ask(message="show grouped column chart for sales and orders by territory")
+
+		self.assertEqual(response["response_type"], "bar_chart")
+		self.assertEqual(response["visualization"]["kind"], "grouped_bar")
+		self.assertEqual(response["visualization"]["series"][1]["name"], "Total Orders")
+
 	def test_list_and_history_include_created_session(self):
 		session = create_session()
 		session_id = session["session_id"]

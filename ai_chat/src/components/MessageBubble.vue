@@ -553,7 +553,7 @@ const chartSeries = computed(() => {
 // Compute highest/lowest indices for bar charts
 const chartHighLow = computed(() => {
   const visualization = props.message.visualization;
-  if (!visualization || visualization.kind === "pie") return null;
+  if (!visualization || visualization.kind === "pie" || visualization.kind === "grouped_bar") return null;
 
   const data = visualization.series?.[0]?.data || [];
   if (data.length < 2) return null;
@@ -572,7 +572,10 @@ const chartHighLow = computed(() => {
 function buildChartOptions(expanded = false) {
   const visualization = props.message.visualization;
   const categories = visualization?.categories || [];
-  const valueLabel = visualization?.value_key?.replaceAll("_", " ") || "Value";
+  const valueLabel = visualization?.value_key?.replaceAll("_", " ")
+    || (visualization?.kind === "grouped_bar" ? "Metrics" : "Value");
+  const isGroupedBar = visualization?.kind === "grouped_bar";
+  const isHorizontal = visualization?.layout === "horizontal";
 
   if (visualization?.kind === "pie") {
     return {
@@ -595,6 +598,60 @@ function buildChartOptions(expanded = false) {
       },
       colors: ["#0f766e", "#14b8a6", "#5eead4", "#99f6e4", "#134e4a", "#2dd4bf"],
       tooltip: {
+        y: {
+          formatter: (value) => formatChartValue(value),
+        },
+      },
+    };
+  }
+
+  if (isGroupedBar) {
+    return {
+      chart: {
+        toolbar: {
+          show: true,
+          tools: { download: downloadIconSvg, selection: false, zoom: false, zoomin: false, zoomout: false, pan: false, reset: false },
+        },
+        stacked: false,
+      },
+      plotOptions: {
+        bar: {
+          horizontal: isHorizontal,
+          borderRadius: 5,
+          columnWidth: isHorizontal ? undefined : "56%",
+          barHeight: isHorizontal ? "58%" : undefined,
+          distributed: false,
+        },
+      },
+      dataLabels: {
+        enabled: false,
+      },
+      xaxis: {
+        categories,
+        labels: {
+          rotate: isHorizontal ? 0 : expanded ? -12 : -20,
+          style: {
+            fontSize: expanded ? "12px" : "11px",
+          },
+        },
+      },
+      yaxis: {
+        title: {
+          text: valueLabel,
+        },
+        labels: {
+          formatter: (value) => formatChartValue(value),
+        },
+      },
+      legend: {
+        show: true,
+        position: "bottom",
+        fontSize: expanded ? "13px" : "12px",
+      },
+      colors: ["#0f766e", "#14b8a6", "#5eead4", "#99f6e4", "#134e4a", "#2dd4bf"],
+      tooltip: {
+        shared: true,
+        intersect: false,
         y: {
           formatter: (value) => formatChartValue(value),
         },

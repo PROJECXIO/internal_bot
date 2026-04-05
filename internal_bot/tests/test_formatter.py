@@ -119,6 +119,134 @@ class TestStructuredFormatter(FrappeTestCase):
 		self.assertIsNone(response["visualization"])
 		self.assertEqual(response["markdown"], "")
 
+	def test_multi_metric_rows_support_grouped_bar_chart(self):
+		response = format_structured_response(
+			self._base_state(
+				[
+					{"territory": "West", "total_sales": 1200, "total_orders": 25},
+					{"territory": "East", "total_sales": 950, "total_orders": 18},
+				],
+				message="show grouped column chart for sales and orders by territory",
+			)
+		)
+
+		self.assertEqual(response["response_type"], "bar_chart")
+		self.assertEqual(response["visualization"]["kind"], "grouped_bar")
+		self.assertEqual(response["visualization"]["layout"], "vertical")
+		self.assertEqual(response["visualization"]["categories"], ["West", "East"])
+		self.assertEqual(
+			response["visualization"]["value_keys"],
+			["total_sales", "total_orders"],
+		)
+		self.assertEqual(
+			response["visualization"]["series"],
+			[
+				{"name": "Total Sales", "data": [1200.0, 950.0]},
+				{"name": "Total Orders", "data": [25.0, 18.0]},
+			],
+		)
+
+	def test_long_form_comparison_rows_support_grouped_bar_chart(self):
+		response = format_structured_response(
+			self._base_state(
+				[
+					{"item_code": "SKU003", "posting_date": "2025-09-16", "total_sales": 50000},
+					{"item_code": "SKU006", "posting_date": "2025-09-16", "total_sales": 89000},
+					{"item_code": "SKU007", "posting_date": "2025-09-16", "total_sales": 90000},
+					{"item_code": "SKU008", "posting_date": "2026-03-03", "total_sales": 10000},
+					{"item_code": "SKU009", "posting_date": "2026-03-03", "total_sales": 12000},
+					{"item_code": "SKU010", "posting_date": "2026-03-03", "total_sales": 45000},
+				],
+				message="compare item sales between 2025-09-16 and 2026-03-03",
+			)
+		)
+
+		self.assertEqual(response["response_type"], "bar_chart")
+		self.assertEqual(response["visualization"]["kind"], "grouped_bar")
+		self.assertEqual(response["visualization"]["label_key"], "item_code")
+		self.assertEqual(response["visualization"]["series_key"], "posting_date")
+		self.assertEqual(response["visualization"]["value_key"], "total_sales")
+		self.assertEqual(
+			response["visualization"]["categories"],
+			["SKU003", "SKU006", "SKU007", "SKU008", "SKU009", "SKU010"],
+		)
+		self.assertEqual(
+			response["visualization"]["series"],
+			[
+				{"name": "2025-09-16", "data": [50000.0, 89000.0, 90000.0, 0.0, 0.0, 0.0]},
+				{"name": "2026-03-03", "data": [0.0, 0.0, 0.0, 10000.0, 12000.0, 45000.0]},
+			],
+		)
+
+	def test_daily_item_sales_rows_support_grouped_bar_chart(self):
+		response = format_structured_response(
+			self._base_state(
+				[
+					{"DATE(posting_date)": "2025-09-03", "item_code": "SKU001", "total_sales": 20000},
+					{"DATE(posting_date)": "2025-09-03", "item_code": "SKU002", "total_sales": 12000},
+					{"DATE(posting_date)": "2025-09-16", "item_code": "SKU003", "total_sales": 50000},
+					{"DATE(posting_date)": "2025-09-16", "item_code": "SKU006", "total_sales": 89000},
+					{"DATE(posting_date)": "2025-09-16", "item_code": "SKU007", "total_sales": 90000},
+					{"DATE(posting_date)": "2025-09-26", "item_code": "SKU004", "total_sales": 20000},
+				],
+				message="make chart for sales for all items per day",
+			)
+		)
+
+		self.assertEqual(response["response_type"], "bar_chart")
+		self.assertEqual(response["visualization"]["kind"], "grouped_bar")
+		self.assertEqual(response["visualization"]["label_key"], "DATE(posting_date)")
+		self.assertEqual(response["visualization"]["series_key"], "item_code")
+		self.assertEqual(response["visualization"]["value_key"], "total_sales")
+		self.assertEqual(
+			response["visualization"]["categories"],
+			["2025-09-03", "2025-09-16", "2025-09-26"],
+		)
+		self.assertEqual(
+			response["visualization"]["series"],
+			[
+				{"name": "SKU001", "data": [20000.0, 0.0, 0.0]},
+				{"name": "SKU002", "data": [12000.0, 0.0, 0.0]},
+				{"name": "SKU003", "data": [0.0, 50000.0, 0.0]},
+				{"name": "SKU006", "data": [0.0, 89000.0, 0.0]},
+				{"name": "SKU007", "data": [0.0, 90000.0, 0.0]},
+				{"name": "SKU004", "data": [0.0, 0.0, 20000.0]},
+			],
+		)
+		self.assertEqual(
+			response["summary"],
+			"2025-09-16 is highest overall at 229,000 across 6 item code groups.",
+		)
+
+	def test_large_daily_item_sales_rows_still_support_grouped_bar_chart(self):
+		response = format_structured_response(
+			self._base_state(
+				[
+					{"DATE(posting_date)": "2025-09-03", "item_code": "SKU001", "total_sales": 20000},
+					{"DATE(posting_date)": "2025-09-03", "item_code": "SKU002", "total_sales": 12000},
+					{"DATE(posting_date)": "2025-09-16", "item_code": "SKU003", "total_sales": 50000},
+					{"DATE(posting_date)": "2025-09-16", "item_code": "SKU006", "total_sales": 89000},
+					{"DATE(posting_date)": "2025-09-16", "item_code": "SKU007", "total_sales": 90000},
+					{"DATE(posting_date)": "2025-09-26", "item_code": "SKU004", "total_sales": 20000},
+					{"DATE(posting_date)": "2026-02-12", "item_code": "SKU005", "total_sales": 15000},
+					{"DATE(posting_date)": "2026-03-03", "item_code": "SKU008", "total_sales": 10000},
+					{"DATE(posting_date)": "2026-03-03", "item_code": "SKU009", "total_sales": 12000},
+					{"DATE(posting_date)": "2026-03-03", "item_code": "SKU010", "total_sales": 45000},
+					{"DATE(posting_date)": "2026-04-17", "item_code": "SKU004", "total_sales": 20000},
+					{"DATE(posting_date)": "2026-04-30", "item_code": "SKU004", "total_sales": 40000},
+					{"DATE(posting_date)": "2026-05-14", "item_code": "SKU004", "total_sales": 20000},
+				],
+				message="make chart for sales for all items per day per item",
+			)
+		)
+
+		self.assertEqual(response["response_type"], "bar_chart")
+		self.assertEqual(response["visualization"]["kind"], "grouped_bar")
+		self.assertEqual(response["visualization"]["label_key"], "DATE(posting_date)")
+		self.assertEqual(response["visualization"]["series_key"], "item_code")
+		self.assertEqual(len(response["visualization"]["categories"]), 7)
+		self.assertEqual(len(response["visualization"]["series"]), 10)
+
 	def test_negative_pie_values_fall_back_to_bar_chart(self):
 		response = format_structured_response(
 			self._base_state(

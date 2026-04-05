@@ -36,7 +36,7 @@ Classify the user's message into exactly one of four intents:
 ## IMPORTANT — conversation context rule:
 If the conversation history shows the assistant just asked a clarification question
 (e.g. "Which document?", "For which period?"), then the user's reply — even a short
-one like "Sales Invoice", "This month", or "2024" — is an ANSWER to that question
+one like "Sales Invoice", "All dates", "This month", or "2024" — is an ANSWER to that question
 and MUST be classified as "query". Never classify a direct answer to a clarification
 question as "clarification_needed".
 

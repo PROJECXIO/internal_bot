@@ -46,10 +46,10 @@ Only ask about the period if the question contains a vague PLACEHOLDER for a \
 period that the user clearly intends to specify (phrases like "for a period", \
 "for some period", "during a period", "for the period").
 - If the question has such a placeholder → ask for the period.
-  Options = ["This month", "Last month", "This year", "Last year", \
+  Options = ["All dates", "This month", "Last month", "This year", "Last year", \
   "Last 30 days", "Custom range"]
 - If NO period is mentioned at all → that is fine, do NOT invent a requirement.
-- If a specific period IS already named ("this month", "2024", "last year") → resolved.
+- If a specific period IS already named ("all dates", "this month", "2024", "last year") → resolved.
 
 ## Step 3 — Decision
 

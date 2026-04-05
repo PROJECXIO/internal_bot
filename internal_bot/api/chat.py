@@ -262,6 +262,24 @@ def get_session_history(session_id: str = None) -> dict:
 	}
 
 
+@frappe.whitelist(methods=["POST"])
+def delete_session(session_id: str) -> dict:
+	"""Permanently delete a chat session and its messages for the current user."""
+	user = _require_authenticated_user()
+
+	if not session_id or not frappe.db.exists("AI Chat Session", {"name": session_id, "user": user}):
+		frappe.throw(_("Chat session not found."), frappe.DoesNotExistError)
+
+	frappe.db.delete("AI Chat Message", {"session": session_id})
+	frappe.db.delete("AI Chat Session", {"name": session_id, "user": user})
+	frappe.db.commit()
+
+	return {
+		"ok": True,
+		"deleted_session_id": session_id,
+	}
+
+
 def _get_or_create_session(user: str, session_id: str | None = None) -> str:
 	"""
 	Return the requested AI Chat Session for the user, or create one.

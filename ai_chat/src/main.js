@@ -66,7 +66,7 @@ async function initApp() {
 	router.beforeEach(async (to, from, next) => {
 		if (to.matched.some((record) => !record.meta.isLoginPage)) {
 			if (!auth.isLoggedIn) {
-				next({ name: 'Login', query: { route: to.path } });
+				next({ name: 'Login', query: { route: to.fullPath } });
 			} else {
 				next();
 			}

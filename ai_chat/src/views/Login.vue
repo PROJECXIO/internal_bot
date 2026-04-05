@@ -83,12 +83,13 @@ export default {
       password: null,
       loading: false,
       errorMessage: null,
+      redirectRoute: null,
     };
   },
   inject: ["$auth"],
   async mounted() {
     if (this.$route?.query?.route) {
-      this.redirect_route = this.$route.query.route;
+      this.redirectRoute = this.$route.query.route;
       this.$router.replace({ query: null });
     }
   },
@@ -109,7 +110,7 @@ export default {
             const data = await tokenRes.json();
             if (data.message) window.csrf_token = data.message;
           } catch { /* ignore */ }
-          this.$router.push({ name: "Home" });
+          this.$router.push(this.redirectRoute || { name: "Home" });
         }
       } catch (e) {
         this.errorMessage = e.messages?.[0] || "Login failed. Please check your credentials.";

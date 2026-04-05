@@ -29,6 +29,7 @@ Rules:
 - For response_type "plain_text", answer the question directly in markdown.
 - For response_type "metric_card", "bar_chart", "pie_chart", and "table", write a quick brief that fits above the visualization.
 - Prefer one short paragraph, or 2-3 short bullets when that is clearer.
+- Sound like a professional data analyst, not a casual chatbot.
 - Use strong markdown emphasis for important business facts:
   - Bold important dates like **2026-04-02**.
   - Bold important numbers and currency values like **229,000** or **$12,500**.
@@ -37,6 +38,8 @@ Rules:
 - Lead with the most important takeaway first.
 - Keep the answer clean and readable, not decorative.
 - Do not mention SQL, internal processing, or implementation details.
+- Do not repeat `answer_prefix` in the markdown.
+- If the response is a category comparison chart, prefer analyst-style observations such as the leader, close runner-up, laggard, spread, or concentration.
 - If this is a follow-up analysis request about a previous result, do not repeat chart instructions or mention visualization.
 - In follow-up analysis, explain the pattern, contrast, or takeaway behind the numbers in plain markdown prose or bullets.
 - If `analysis_mode` is true, analyze the data instead of just restating it.
@@ -75,19 +78,24 @@ def run(state: GraphState) -> dict:
 	try:
 		rows = state.get("query_result_rows") or []
 		analysis_mode = _is_analysis_request(state)
-		data_rows = _serialize_rows(rows[:25] if analysis_mode else rows[:3])
+		preview_response = format_structured_response({**state, "answer_markdown": state.get("answer_markdown") or ""})
+		response_type = preview_response.get("response_type")
+		preview_visualization = preview_response.get("visualization") or {}
+		row_limit = 25 if analysis_mode else 8 if response_type in {"bar_chart", "pie_chart", "table"} else 3
+		data_rows = _serialize_rows(rows[:row_limit])
 		user_content = json.dumps(
 			{
 				"question": state.get("normalized_question") or state.get("raw_message", ""),
 				"analysis_mode": analysis_mode,
-				"response_type": state.get("response_type"),
-				"title": state.get("normalized_question") or state.get("raw_message", ""),
+				"response_type": response_type,
+				"visualization_kind": preview_visualization.get("kind"),
+				"title": preview_response.get("title") or state.get("normalized_question") or state.get("raw_message", ""),
 				"columns": list(rows[0].keys()) if rows else [],
 				"row_count": len(rows),
 				"data_rows": data_rows,
 				"visualization_choice": state.get("visualization_preference") or "auto",
 				"answer_prefix": state.get("answer_prefix") or "",
-				"summary": state.get("summary") or "",
+				"summary": preview_response.get("summary") or state.get("summary") or "",
 				"follow_up_to_previous_result": bool(state.get("follow_up_to_previous_result")),
 				"analysis_hints": _build_analysis_hints(rows),
 			},
@@ -115,7 +123,10 @@ def run(state: GraphState) -> dict:
 		output_tokens = (state.get("output_tokens") or 0) + (
 			getattr(llm_client, "last_output_tokens", 0) or 0
 		)
-		answer_markdown = _clean_markdown(raw)
+		answer_markdown = _strip_repeated_prefix(
+			_clean_markdown(raw),
+			state.get("answer_prefix") or "",
+		)
 		if analysis_mode and not answer_markdown:
 			answer_markdown = _build_analysis_fallback(rows)
 		trace.detail(state, "Answer markdown", answer_markdown[:120] if answer_markdown else "")
@@ -163,6 +174,22 @@ def _clean_markdown(raw: str) -> str:
 	match = re.search(r"```(?:markdown)?\s*([\s\S]*?)```", text, re.IGNORECASE)
 	if match:
 		text = match.group(1).strip()
+
+	return text
+
+
+def _strip_repeated_prefix(markdown: str, answer_prefix: str) -> str:
+	text = (markdown or "").strip()
+	prefix = (answer_prefix or "").strip()
+	if not text or not prefix:
+		return text
+
+	normalized_prefix = re.sub(r"[\s:.-]+$", "", prefix).lower()
+	for candidate in (text, re.sub(r"^#+\s*", "", text, count=1).strip()):
+		normalized_candidate = re.sub(r"[\s:.-]+$", "", candidate).lower()
+		if normalized_candidate.startswith(normalized_prefix):
+			remainder = candidate[len(prefix):].lstrip(" :-\n")
+			return remainder or text
 
 	return text
 

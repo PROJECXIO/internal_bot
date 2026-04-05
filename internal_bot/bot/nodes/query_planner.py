@@ -27,6 +27,16 @@ from internal_bot.bot import progress, trace
 
 _MAX_RETRIES = 3
 
+def _is_pure_analysis_follow_up(state: GraphState) -> bool:
+    """Return True when the user is asking for analysis of a previous result,
+    not a brand-new query.  Fully trusts the LLM-powered intent classifier's
+    follow_up_to_previous_result flag — no keyword overrides."""
+    if not state.get("follow_up_to_previous_result"):
+        return False
+
+    last_response = state.get("last_assistant_response") or {}
+    return bool(last_response.get("rows"))
+
 
 def run(state: GraphState) -> dict:
     t0 = time.monotonic()
@@ -42,6 +52,21 @@ def run(state: GraphState) -> dict:
             else f"Trying again\u2026 (attempt {attempt + 1})"
         )
         progress.emit(state, node_name, label)
+
+    # ── Short-circuit: reuse previous rows for pure analysis follow-ups ──
+    if _is_pure_analysis_follow_up(state):
+        last_response = state.get("last_assistant_response") or {}
+        cached_rows = last_response.get("rows") or []
+        trace.detail(state, "Analysis follow-up", f"Reusing {len(cached_rows)} cached row(s)")
+        return _update(state, node_name, t0, {
+            "query_result_rows": cached_rows,
+            "query_is_valid": True,
+            "query_execution_error": "",
+            "query_invalid_reason": "",
+            "result_row_count": len(cached_rows),
+            "query_generation_attempts": 0,
+            "retries": 0,
+        }, log_t0)
 
     llm_client = state.get("_llm_client")
     if not llm_client:

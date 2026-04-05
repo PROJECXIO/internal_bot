@@ -89,6 +89,22 @@ class TestStructuredFormatter(FrappeTestCase):
 		self.assertEqual(response["visualization"]["kind"], "pie")
 		self.assertEqual(response["markdown"], "")
 
+	def test_breakdown_word_does_not_force_pie_chart_for_ranked_sales(self):
+		response = format_structured_response(
+			self._base_state(
+				[
+					{"item_code": "SKU007", "total_sales": 90000},
+					{"item_code": "SKU006", "total_sales": 89000},
+					{"item_code": "SKU003", "total_sales": 50000},
+				],
+				message="show me the sales breakdown by item for 2025-09-16",
+			)
+		)
+
+		self.assertEqual(response["response_type"], "bar_chart")
+		self.assertEqual(response["visualization"]["kind"], "bar")
+		self.assertEqual(response["visualization"]["categories"], ["SKU007", "SKU006", "SKU003"])
+
 	def test_multi_metric_rows_fall_back_to_table(self):
 		response = format_structured_response(
 			self._base_state(

@@ -71,7 +71,7 @@ def run(state: GraphState) -> dict:
     discovered_rows = _rank_by_relevance(discovered_rows, keywords)
     previous_doctypes = set(state.get("last_discovered_doctypes") or [])
 
-    if state.get("follow_up_to_previous_result") and previous_doctypes:
+    if previous_doctypes and len(discovered_rows) > 1:
         matching_previous = [row for row in discovered_rows if row["name"] in previous_doctypes]
         if matching_previous:
             discovered_rows = matching_previous

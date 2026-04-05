@@ -60,9 +60,10 @@ body,
   width: 100%;
   border: 1px solid rgba(226, 232, 240, 1);
   border-radius: 1rem;
-  padding: 0.85rem 0.9rem;
-  text-align: left;
   background: rgba(255, 255, 255, 0.94);
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
   transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
 }
 
@@ -74,6 +75,41 @@ body,
 .session-sidebar__item--active {
   border-color: rgba(20, 184, 166, 0.65);
   box-shadow: 0 18px 35px -30px rgba(15, 118, 110, 0.55);
+}
+
+.session-sidebar__item-main {
+  width: 100%;
+  border: 0;
+  border-radius: 1rem;
+  padding: 0.85rem 0 0.85rem 0.9rem;
+  text-align: left;
+  background: transparent;
+}
+
+.session-sidebar__item-delete {
+  margin: 0.6rem 0.65rem 0 0;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 999px;
+  padding: 0.32rem;
+  color: #94a3b8;
+  background: transparent;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+.session-sidebar__item-delete:hover {
+  color: #dc2626;
+  background: rgba(254, 226, 226, 0.9);
+}
+
+.session-sidebar__item-delete:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.session-sidebar__item-delete svg {
+  width: 0.95rem;
+  height: 0.95rem;
 }
 
 .session-sidebar__item-title {

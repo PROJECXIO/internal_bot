@@ -467,7 +467,36 @@ def _should_use_pie_chart(preference: str, title: str, values: Sequence[float]) 
 		return False
 
 	title_text = title.lower()
-	return any(keyword in title_text for keyword in ("share", "distribution", "breakdown", "composition", "portion"))
+	if any(
+		keyword in title_text
+		for keyword in (
+			"top",
+			"highest",
+			"lowest",
+			"rank",
+			"ranking",
+			"compare",
+			"comparison",
+			"versus",
+			" vs ",
+		)
+	):
+		return False
+
+	return any(
+		keyword in title_text
+		for keyword in (
+			"share",
+			"distribution",
+			"composition",
+			"portion",
+			"percent",
+			"percentage",
+			"contribution",
+			"mix",
+			"split",
+		)
+	)
 
 
 def _summarize_metric(payload: dict) -> str:

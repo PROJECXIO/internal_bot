@@ -8,12 +8,20 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 from unittest.mock import MagicMock, patch
 
-from internal_bot.api.chat import ask, _get_or_create_session, create_session, get_session_history, list_sessions
+from internal_bot.api.chat import (
+	ask,
+	_get_or_create_session,
+	create_session,
+	delete_session,
+	get_session_history,
+	list_sessions,
+)
 
 
 class TestChatAPI(FrappeTestCase):
 	def setUp(self):
 		frappe.session.user = "Administrator"
+		self._extra_session_names = []
 
 	def tearDown(self):
 		session_names = frappe.get_all(
@@ -21,6 +29,7 @@ class TestChatAPI(FrappeTestCase):
 			filters={"user": "Administrator"},
 			pluck="name",
 		)
+		session_names = list(set(session_names + self._extra_session_names))
 		if session_names:
 			frappe.db.delete("AI Chat Message", {"session": ["in", session_names]})
 			frappe.db.delete("AI Chat Session", {"name": ["in", session_names]})
@@ -55,6 +64,52 @@ class TestChatAPI(FrappeTestCase):
 
 		self.assertNotEqual(first["session_id"], second["session_id"])
 		self.assertEqual(frappe.db.count("AI Chat Session", {"user": "Administrator"}), 2)
+
+	def test_delete_session_removes_owned_session_and_messages(self):
+		session = create_session()
+		session_id = session["session_id"]
+
+		frappe.get_doc(
+			{
+				"doctype": "AI Chat Message",
+				"session": session_id,
+				"user": "Administrator",
+				"role": "user",
+				"status": "success",
+				"content": "show customers",
+			}
+		).insert(ignore_permissions=True)
+		frappe.db.commit()
+
+		response = delete_session(session_id)
+
+		self.assertTrue(response["ok"])
+		self.assertEqual(response["deleted_session_id"], session_id)
+		self.assertFalse(frappe.db.exists("AI Chat Session", session_id))
+		self.assertEqual(frappe.db.count("AI Chat Message", {"session": session_id}), 0)
+
+	def test_deleted_session_no_longer_appears_in_session_list(self):
+		session = create_session()
+		session_id = session["session_id"]
+
+		delete_session(session_id)
+		session_list = list_sessions()
+
+		self.assertFalse(any(item["session_id"] == session_id for item in session_list["sessions"]))
+
+	def test_delete_missing_session_raises_not_found(self):
+		with self.assertRaises(frappe.DoesNotExistError):
+			delete_session("AICS-2099-01-01-99999")
+
+	def test_delete_other_users_session_is_rejected_as_not_found(self):
+		session = create_session()
+		session_id = session["session_id"]
+		frappe.db.set_value("AI Chat Session", session_id, "user", "Guest")
+		frappe.db.commit()
+		self._extra_session_names.append(session_id)
+
+		with self.assertRaises(frappe.DoesNotExistError):
+			delete_session(session_id)
 
 	def test_ask_requires_login(self):
 		frappe.session.user = "Guest"

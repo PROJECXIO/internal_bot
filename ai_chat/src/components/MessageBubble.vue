@@ -373,6 +373,18 @@
         />
       </template>
 
+      <div v-if="showConfidence" class="answer-quality">
+        <span class="answer-quality__dots" :title="`Confidence: ${Math.round(confidenceScore * 100)}%`">
+          <span
+            v-for="i in 5"
+            :key="i"
+            class="answer-quality__dot"
+            :class="i <= confidenceDots ? 'answer-quality__dot--filled' : 'answer-quality__dot--empty'"
+          >●</span>
+        </span>
+        <span class="answer-quality__label">{{ confidenceLabelText }}</span>
+      </div>
+
       <details v-if="hasDebugPanel" class="message-debug-panel">
         <summary class="message-debug-panel__summary">
           <span>Debug context</span>
@@ -491,6 +503,25 @@ const chartType = computed(() => {
   if (kind === "pie") return "pie";
   if (kind === "line") return "line";
   return "bar";
+});
+
+const confidenceScore = computed(() => props.message.meta?.confidence ?? null);
+const confidenceLabel = computed(() => props.message.meta?.confidence_label || "");
+const confidenceDots = computed(() => {
+  const score = confidenceScore.value;
+  if (score === null) return 0;
+  if (score >= 0.85) return 5;
+  if (score >= 0.70) return 4;
+  if (score >= 0.55) return 3;
+  if (score >= 0.35) return 2;
+  return 1;
+});
+const showConfidence = computed(() =>
+  !isUser.value && props.message.status === "success" && confidenceScore.value !== null
+);
+const confidenceLabelText = computed(() => {
+  const labels = { high: "Strong", medium: "Moderate", low: "Weak", very_low: "Uncertain" };
+  return labels[confidenceLabel.value] || "";
 });
 
 const hasDebugPanel = computed(() => {

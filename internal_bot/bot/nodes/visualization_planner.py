@@ -30,7 +30,7 @@ visualization choices:
 - "card"  — 1 row, 1 numeric value (a single KPI/metric)
 - "bar"   — default for comparing values across categories (rankings, totals by group, item/SKU/customer/date sales)
 - "line"  — time-series or trend data; prefer when x-axis is temporal (dates, months, years, quarters) and there are more than 4 data points
-- "pie"   — only for clear part-of-whole/share/composition questions with 2–8 categories and all positive values
+- "pie"   — proportions, shares, breakdowns, distributions, or "how much of the total" questions with 2–8 categories; also good for comparing a few items' contributions
 - "text"  — factual lookup, large table, or when no chart fits
 - "auto"  — genuinely uncertain; let the system decide
 
@@ -39,7 +39,8 @@ For "text" answers use something like "Here's what I found:" or "I found your an
 For charts/cards use something like "Here is the sales comparison:" or "Here are the numbers:".
 Prefer clear, professional phrasing. Avoid casual filler like "you asked for".
 If the x-axis is a time dimension (months, dates, years) and there are more than 4 data points, prefer "line" over "bar".
-If the user wants another chart but does not explicitly ask for pie, prefer "bar".\
+When the question is about shares, proportions, breakdowns, or distribution across a small number of categories (2–8), prefer "pie".
+When the question is about ranking, top/bottom, or time-based comparisons, prefer "bar" or "line".\
 """
 
 

@@ -33,7 +33,7 @@ def format_structured_response(state: "GraphState") -> dict:
 			"markdown": state.get("answer_markdown")
 			or state.get("intent_reason")
 			or "Hello! How can I help you today?",
-			"meta": {"confidence": 1.0},
+			"meta": {"confidence": 1.0, "confidence_label": "high"},
 		}
 
 	elif intent == "clarification_needed":
@@ -44,7 +44,7 @@ def format_structured_response(state: "GraphState") -> dict:
 			"markdown": state.get("answer_markdown")
 			or state.get("intent_reason")
 			or "Could you clarify your question?",
-			"meta": {"confidence": 0.4},
+			"meta": {"confidence": 0.4, "confidence_label": "low"},
 		}
 
 	elif intent == "blocked":
@@ -54,7 +54,7 @@ def format_structured_response(state: "GraphState") -> dict:
 			"markdown": state.get("answer_markdown")
 			or state.get("intent_reason")
 			or "This request touches restricted data.",
-			"meta": {"confidence": 1.0},
+			"meta": {"confidence": 1.0, "confidence_label": "high"},
 		}
 
 	elif state.get("query_execution_error") or (
@@ -69,14 +69,16 @@ def format_structured_response(state: "GraphState") -> dict:
 			"status": "error",
 			"reason": reason,
 			"markdown": state.get("answer_markdown") or reason,
-			"meta": {"confidence": 0.0, "error_detail": error_msg},
+			"meta": {"confidence": 0.0, "confidence_label": "very_low", "error_detail": error_msg},
 		}
 
 	else:
 		response = build_success_payload(state)
 		response["status"] = "success"
+		confidence = _estimate_confidence(state)
 		response["meta"] = {
-			"confidence": _estimate_confidence(state),
+			"confidence": confidence,
+			"confidence_label": _confidence_label(confidence),
 			"has_more": len(response["rows"]) >= (state.get("max_rows") or 100),
 			"returned_rows": len(response["rows"]),
 		}
@@ -285,9 +287,40 @@ def _make_title(question: str) -> str:
 
 def _estimate_confidence(state: "GraphState") -> float:
 	base = 0.95
+
+	# Schema quality
+	decision = state.get("schema_decision", "")
+	if decision == "ambiguous":
+		base -= 0.15
+	elif decision == "low_confidence":
+		base -= 0.25
+	elif decision == "no_match":
+		base -= 0.40
+
+	# Query retries
 	retries = state.get("query_generation_attempts", 0)
-	base -= retries * 0.1
-	return round(max(0.1, min(1.0, base)), 2)
+	base -= retries * 0.10
+
+	# Empty results
+	rows = state.get("query_result_rows") or []
+	if not rows:
+		base -= 0.20
+
+	# Follow-up context penalty
+	if state.get("follow_up_to_previous_result"):
+		base -= 0.05
+
+	return round(max(0.05, min(1.0, base)), 2)
+
+
+def _confidence_label(score: float) -> str:
+	if score >= 0.85:
+		return "high"
+	if score >= 0.60:
+		return "medium"
+	if score >= 0.35:
+		return "low"
+	return "very_low"
 
 
 def _serialize_rows(rows: list[dict]) -> list[dict]:
@@ -865,6 +898,12 @@ def _should_use_pie_chart(preference: str, title: str, values: Sequence[float]) 
 			"contribution",
 			"mix",
 			"split",
+			"breakdown",
+			"proportion",
+			"نسبة",
+			"توزيع",
+			"حصة",
+			"نسب",
 		)
 	)
 

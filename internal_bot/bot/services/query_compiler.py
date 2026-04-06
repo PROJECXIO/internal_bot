@@ -137,7 +137,13 @@ def compile_analytics_intent(
     where_parts = []
 
     for filt in intent.get("filters", []):
-        fieldname, op, value = filt[0], filt[1], filt[2]
+        # Handle both 3-element [field, op, value] and 4-element [doctype, field, op, value]
+        if len(filt) == 4:
+            dt, field, op, value = filt[0], filt[1], filt[2], filt[3]
+            # Build "DocType.field" reference if not already qualified
+            fieldname = f"{dt}.{field}" if "." not in field else field
+        else:
+            fieldname, op, value = filt[0], filt[1], filt[2]
         if op.lower() not in _ALLOWED_OPERATORS:
             raise ValueError(f"Unsupported filter operator: '{op}'")
         col, _ = _resolve_field_reference(

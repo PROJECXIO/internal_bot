@@ -346,6 +346,32 @@ body,
   stroke: currentColor;
 }
 
+/* ── Answer quality dot rating ─────────────────────────────────── */
+.answer-quality {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin-top: 0.5rem;
+  padding-top: 0.375rem;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+.answer-quality__dots {
+  display: flex;
+  gap: 2px;
+  font-size: 0.5rem;
+  line-height: 1;
+  cursor: default;
+}
+.answer-quality__dot--filled { color: #0f766e; }
+.answer-quality__dot--empty  { color: #d1d5db; }
+.answer-quality__label {
+  font-size: 0.625rem;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 500;
+}
+
 .message-debug-panel {
   margin-top: 0.9rem;
   border: 1px solid rgba(148, 163, 184, 0.28);

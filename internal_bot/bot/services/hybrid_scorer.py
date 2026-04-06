@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import re
 
 from internal_bot.bot.services import permission_service
 from internal_bot.bot.services.doctype_aliases import get_alias_index
@@ -24,6 +25,7 @@ MINIMUM_THRESHOLD = 0.10
 _LEXICAL_ALPHA = 0.6
 _CONTEXT_PREVIOUS_DOCTYPE_BOOST = 0.12
 _CONTEXT_FOLLOW_UP_BOOST = 0.35
+_IDENTIFIER_TOKEN_RE = re.compile(r"(?:[a-z]+[-_]?\d+|\d{4})", re.IGNORECASE)
 
 
 @dataclass
@@ -112,6 +114,7 @@ def rank_candidates(
     alias_index = get_alias_index()
     candidate_phrases = [normalized_query, match_query, *query_bigrams, *query_tokens]
     exact_alias_doctype = next((alias_index.get(phrase) for phrase in candidate_phrases if alias_index.get(phrase)), None)
+    allow_context_priority = _should_apply_context_priority(query_tokens, follow_up_to_previous_result)
 
     scored = []
     blocked_set = set(blocked or set())
@@ -133,7 +136,7 @@ def rank_candidates(
         else:
             final_score = lexical_score
 
-        if doc.doctype_name in preferred_set:
+        if allow_context_priority and doc.doctype_name in preferred_set:
             final_score += _CONTEXT_PREVIOUS_DOCTYPE_BOOST
             if follow_up_to_previous_result:
                 final_score += _CONTEXT_FOLLOW_UP_BOOST
@@ -163,6 +166,19 @@ def rank_candidates(
         )
     )
     return [candidate for candidate in scored if candidate.doctype_name in permitted]
+
+
+def _should_apply_context_priority(
+    query_tokens: list[str],
+    follow_up_to_previous_result: bool,
+) -> bool:
+    compact_tokens = [token for token in query_tokens if token]
+    if not compact_tokens:
+        return follow_up_to_previous_result
+    max_tokens = 3 if follow_up_to_previous_result else 2
+    if len(compact_tokens) > max_tokens:
+        return False
+    return not any(_IDENTIFIER_TOKEN_RE.search(token) for token in compact_tokens)
 
 
 def classify_confidence(candidates: list[ScoredCandidate]) -> tuple[str, list[ScoredCandidate]]:

@@ -93,6 +93,38 @@ class TestStructuredFormatter(FrappeTestCase):
 		self.assertEqual(response["visualization"]["kind"], "pie")
 		self.assertEqual(response["markdown"], "")
 
+	def test_auto_share_question_prefers_donut_chart(self):
+		response = format_structured_response(
+			self._base_state(
+				[
+					{"territory": "West", "total_sales": 1200},
+					{"territory": "East", "total_sales": 950},
+					{"territory": "North", "total_sales": 600},
+				],
+				message="show sales share by territory",
+			)
+		)
+
+		self.assertEqual(response["response_type"], "donut_chart")
+		self.assertEqual(response["visualization"]["kind"], "donut")
+
+	def test_explicit_donut_preference_returns_donut_chart(self):
+		response = format_structured_response(
+			{
+				**self._base_state(
+					[
+						{"territory": "West", "total_sales": 1200},
+						{"territory": "East", "total_sales": 950},
+					],
+					message="show sales by territory",
+				),
+				"visualization_preference": "donut",
+			}
+		)
+
+		self.assertEqual(response["response_type"], "donut_chart")
+		self.assertEqual(response["visualization"]["kind"], "donut")
+
 	def test_breakdown_word_does_not_force_pie_chart_for_ranked_sales(self):
 		response = format_structured_response(
 			self._base_state(
@@ -182,7 +214,7 @@ class TestStructuredFormatter(FrappeTestCase):
 			],
 		)
 
-	def test_daily_item_sales_rows_support_grouped_bar_chart(self):
+	def test_daily_item_sales_rows_support_grouped_line_chart(self):
 		response = format_structured_response(
 			self._base_state(
 				[
@@ -197,8 +229,8 @@ class TestStructuredFormatter(FrappeTestCase):
 			)
 		)
 
-		self.assertEqual(response["response_type"], "bar_chart")
-		self.assertEqual(response["visualization"]["kind"], "grouped_bar")
+		self.assertEqual(response["response_type"], "line_chart")
+		self.assertEqual(response["visualization"]["kind"], "grouped_line")
 		self.assertEqual(response["visualization"]["label_key"], "DATE(posting_date)")
 		self.assertEqual(response["visualization"]["series_key"], "item_code")
 		self.assertEqual(response["visualization"]["value_key"], "total_sales")
@@ -222,7 +254,7 @@ class TestStructuredFormatter(FrappeTestCase):
 			"2025-09-16 is highest overall at 229,000 across 6 item code groups.",
 		)
 
-	def test_year_month_day_comparison_rows_support_grouped_bar_chart(self):
+	def test_year_month_day_comparison_rows_support_grouped_line_chart(self):
 		response = format_structured_response(
 			self._base_state(
 				[
@@ -235,8 +267,8 @@ class TestStructuredFormatter(FrappeTestCase):
 			)
 		)
 
-		self.assertEqual(response["response_type"], "bar_chart")
-		self.assertEqual(response["visualization"]["kind"], "grouped_bar")
+		self.assertEqual(response["response_type"], "line_chart")
+		self.assertEqual(response["visualization"]["kind"], "grouped_line")
 		self.assertEqual(response["visualization"]["label_key"], "month_day")
 		self.assertEqual(response["visualization"]["series_key"], "YEAR(posting_date)")
 		self.assertEqual(response["visualization"]["categories"], ["02-12", "03-03"])
@@ -248,7 +280,7 @@ class TestStructuredFormatter(FrappeTestCase):
 			],
 		)
 
-	def test_large_daily_item_sales_rows_still_support_grouped_bar_chart(self):
+	def test_large_daily_item_sales_rows_still_support_grouped_line_chart(self):
 		response = format_structured_response(
 			self._base_state(
 				[
@@ -270,12 +302,34 @@ class TestStructuredFormatter(FrappeTestCase):
 			)
 		)
 
-		self.assertEqual(response["response_type"], "bar_chart")
-		self.assertEqual(response["visualization"]["kind"], "grouped_bar")
+		self.assertEqual(response["response_type"], "line_chart")
+		self.assertEqual(response["visualization"]["kind"], "grouped_line")
 		self.assertEqual(response["visualization"]["label_key"], "DATE(posting_date)")
 		self.assertEqual(response["visualization"]["series_key"], "item_code")
 		self.assertEqual(len(response["visualization"]["categories"]), 7)
 		self.assertEqual(len(response["visualization"]["series"]), 10)
+
+	def test_year_month_dimension_keeps_same_months_from_different_years_separate(self):
+		response = format_structured_response(
+			{
+				**self._base_state(
+					[
+						{"item_code": "SKU004", "YEAR_MONTH(posting_date)": "2025-05", "total_sales": 30000},
+						{"item_code": "SKU004", "YEAR_MONTH(posting_date)": "2026-05", "total_sales": 45000},
+						{"item_code": "SKU007", "YEAR_MONTH(posting_date)": "2025-05", "total_sales": 20000},
+						{"item_code": "SKU007", "YEAR_MONTH(posting_date)": "2026-05", "total_sales": 25000},
+					],
+					message="monthly sales by item",
+				),
+				"visualization_preference": "line",
+			}
+		)
+
+		self.assertEqual(response["response_type"], "line_chart")
+		self.assertEqual(response["visualization"]["kind"], "grouped_line")
+		self.assertEqual(response["visualization"]["label_key"], "YEAR_MONTH(posting_date)")
+		self.assertEqual(response["visualization"]["series_key"], "item_code")
+		self.assertEqual(response["visualization"]["categories"], ["2025-05", "2026-05"])
 
 	def test_negative_pie_values_fall_back_to_bar_chart(self):
 		response = format_structured_response(
@@ -463,8 +517,44 @@ class TestStructuredFormatter(FrappeTestCase):
 		self.assertEqual(response["visualization"]["kind"], "line")
 		self.assertEqual(response["visualization"]["label_key"], "MONTH(posting_date)")
 
-	def test_auto_temporal_many_rows_picks_line(self):
-		"""Auto preference with 12 monthly rows should auto-detect line chart."""
+	def test_line_preference_on_grouped_temporal_data_returns_grouped_line(self):
+		response = format_structured_response(
+			{
+				**self._base_state(
+					[
+						{"YEAR(posting_date)": 2025, "MONTH(posting_date)": 2, "total_sales": 18000},
+						{"YEAR(posting_date)": 2026, "MONTH(posting_date)": 2, "total_sales": 15000},
+						{"YEAR(posting_date)": 2025, "MONTH(posting_date)": 3, "total_sales": 42000},
+						{"YEAR(posting_date)": 2026, "MONTH(posting_date)": 3, "total_sales": 67000},
+					],
+					message="compare monthly sales between this year and last year",
+				),
+				"visualization_preference": "line",
+			}
+		)
+
+		self.assertEqual(response["response_type"], "line_chart")
+		self.assertEqual(response["visualization"]["kind"], "grouped_line")
+
+	def test_explicit_area_preference_returns_area_chart(self):
+		response = format_structured_response(
+			{
+				**self._base_state(
+					[
+						{"MONTH(posting_date)": i, "total_sales": i * 10000}
+						for i in range(1, 7)
+					],
+					message="show monthly sales trend",
+				),
+				"visualization_preference": "area",
+			}
+		)
+
+		self.assertEqual(response["response_type"], "area_chart")
+		self.assertEqual(response["visualization"]["kind"], "area")
+
+	def test_auto_temporal_volume_many_rows_picks_area(self):
+		"""Auto preference with temporal volume data should auto-detect area chart."""
 		response = format_structured_response(
 			self._base_state(
 				[
@@ -475,8 +565,8 @@ class TestStructuredFormatter(FrappeTestCase):
 			)
 		)
 
-		self.assertEqual(response["response_type"], "line_chart")
-		self.assertEqual(response["visualization"]["kind"], "line")
+		self.assertEqual(response["response_type"], "area_chart")
+		self.assertEqual(response["visualization"]["kind"], "area")
 
 	def test_auto_temporal_few_rows_stays_bar(self):
 		"""Auto preference with only 3 temporal rows should stay as bar chart."""
@@ -492,6 +582,23 @@ class TestStructuredFormatter(FrappeTestCase):
 
 		self.assertEqual(response["response_type"], "bar_chart")
 		self.assertEqual(response["visualization"]["kind"], "bar")
+
+	def test_explicit_stacked_bar_preference_returns_stacked_bar_chart(self):
+		response = format_structured_response(
+			{
+				**self._base_state(
+					[
+						{"territory": "West", "hardware_sales": 1200, "services_sales": 800, "support_sales": 450},
+						{"territory": "East", "hardware_sales": 950, "services_sales": 620, "support_sales": 300},
+					],
+					message="show sales composition by territory",
+				),
+				"visualization_preference": "stacked_bar",
+			}
+		)
+
+		self.assertEqual(response["response_type"], "stacked_bar_chart")
+		self.assertEqual(response["visualization"]["kind"], "stacked_bar")
 
 	def test_many_series_bucketed_into_others(self):
 		"""When more than 6 series exist, extras are merged into 'Others'."""

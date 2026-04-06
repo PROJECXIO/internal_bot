@@ -35,14 +35,15 @@ def load_chat_memory(session_name: str, window_size: int) -> dict:
 	last_discovered_doctypes = []
 
 	for msg in reversed(messages):
-		if msg.role == "assistant" and not last_assistant_response:
-			if msg.structured_response:
-				try:
-					last_assistant_response = frappe.parse_json(msg.structured_response) or {}
-				except Exception:
-					last_assistant_response = {}
-			last_assistant_context_text = _build_response_context_text(last_assistant_response)
-			if msg.discovered_entities:
+		if msg.role == "assistant":
+			if not last_assistant_response:
+				if msg.structured_response:
+					try:
+						last_assistant_response = frappe.parse_json(msg.structured_response) or {}
+					except Exception:
+						last_assistant_response = {}
+				last_assistant_context_text = _build_response_context_text(last_assistant_response)
+			if not last_discovered_doctypes and msg.discovered_entities:
 				try:
 					last_discovered_doctypes = frappe.parse_json(msg.discovered_entities) or []
 				except Exception:

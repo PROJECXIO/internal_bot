@@ -7,7 +7,7 @@ Uses the LLM to:
 2. Generate a short, friendly intro sentence shown above the result.
 
 Sets in state:
-  visualization_preference  — "card" | "bar" | "pie" | "text" | "auto"
+  visualization_preference  — "card" | "bar" | "pie" | "donut" | "line" | "area" | "stacked_bar" | "text" | "auto"
   answer_prefix             — e.g. "Here's the breakdown you asked for:"
 """
 import json
@@ -19,7 +19,7 @@ import frappe
 from internal_bot.bot.state import GraphState
 from internal_bot.bot import progress, trace
 
-_VALID_PREFERENCES = {"card", "bar", "pie", "line", "text", "auto"}
+_VALID_PREFERENCES = {"card", "bar", "pie", "donut", "line", "area", "stacked_bar", "text", "auto"}
 
 _SYSTEM_PROMPT = """\
 You are a data presentation assistant for an ERP chatbot.
@@ -29,7 +29,10 @@ Given a user question and SQL result shape, output ONLY valid JSON — no markdo
 visualization choices:
 - "card"  — 1 row, 1 numeric value (a single KPI/metric)
 - "bar"   — default for comparing values across categories (rankings, totals by group, item/SKU/customer/date sales)
+- "donut" — proportions or shares across 2–8 categories; prefer this over pie for a more modern look
 - "line"  — time-series or trend data; prefer when x-axis is temporal (dates, months, years, quarters) and there are more than 4 data points
+- "area"  — time-series emphasizing volume, magnitude, or cumulative values with a filled line
+- "stacked_bar" — composition across categories where each bar should show total plus a breakdown into parts
 - "pie"   — proportions, shares, breakdowns, distributions, or "how much of the total" questions with 2–8 categories; also good for comparing a few items' contributions
 - "text"  — factual lookup, large table, or when no chart fits
 - "auto"  — genuinely uncertain; let the system decide
@@ -39,7 +42,9 @@ For "text" answers use something like "Here's what I found:" or "I found your an
 For charts/cards use something like "Here is the sales comparison:" or "Here are the numbers:".
 Prefer clear, professional phrasing. Avoid casual filler like "you asked for".
 If the x-axis is a time dimension (months, dates, years) and there are more than 4 data points, prefer "line" over "bar".
-When the question is about shares, proportions, breakdowns, or distribution across a small number of categories (2–8), prefer "pie".
+When the question is about shares, proportions, breakdowns, or distribution across a small number of categories (2–8), prefer "donut" over "pie".
+When the question is about temporal volume or magnitude, "area" is a good choice.
+When each category contains multiple component parts and the user should see both the total and the composition, prefer "stacked_bar".
 When the question is about ranking, top/bottom, or time-based comparisons, prefer "bar" or "line".\
 """
 
@@ -167,7 +172,16 @@ def _should_explain_previous_result(state: GraphState) -> bool:
 
     last_response = state.get("last_assistant_response") or {}
     last_response_type = last_response.get("response_type")
-    if last_response_type not in {"bar_chart", "pie_chart", "line_chart", "metric_card", "table"}:
+    if last_response_type not in {
+        "bar_chart",
+        "pie_chart",
+        "donut_chart",
+        "line_chart",
+        "area_chart",
+        "stacked_bar_chart",
+        "metric_card",
+        "table",
+    }:
         return False
 
     return True

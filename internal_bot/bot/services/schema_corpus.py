@@ -18,8 +18,8 @@ from internal_bot.bot.services.text_normalizer import (
     tokenize,
 )
 
-_CORPUS_CACHE_KEY = "internal_bot:schema_corpus:v1"
-_EMBEDDINGS_CACHE_KEY = "internal_bot:schema_corpus_embeddings:v1"
+_CORPUS_CACHE_KEY = "internal_bot:schema_corpus:v2"
+_EMBEDDINGS_CACHE_KEY = "internal_bot:schema_corpus_embeddings:v2"
 _CORPUS_TTL = 60 * 60
 
 

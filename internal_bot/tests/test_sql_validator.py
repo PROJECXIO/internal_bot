@@ -176,6 +176,51 @@ class TestGenerateQueryIntent:
 		intent = generate_query_intent("show customers", "", "", llm)
 		assert intent["mode"] == "list"
 
+	def test_repairs_json_with_bare_keys_and_trailing_commas(self):
+		raw = """
+		{
+		  "mode": "analytics",
+		  "primary_doctype": "Sales Invoice",
+		  joins: [],
+		  "dimensions": ["customer"],
+		  "metrics": [
+		    {"func": "SUM", "field": "grand_total", "alias": "total_sales",}
+		  ],
+		  "filters": [],
+		  "limit": 20,
+		}
+		"""
+		llm = _mock_llm(raw)
+		intent = generate_query_intent("total sales by customer", "", "", llm)
+		assert intent["mode"] == "analytics"
+		assert intent["primary_doctype"] == "Sales Invoice"
+		assert intent["joins"] == []
+
+	def test_repairs_single_quoted_json_like_output(self):
+		raw = """{
+		  'mode': 'list',
+		  'doctype': 'Customer',
+		  'fields': ['name'],
+		  'filters': [],
+		  'limit': 5,
+		}"""
+		llm = _mock_llm(raw)
+		intent = generate_query_intent("show customers", "", "", llm)
+		assert intent["mode"] == "list"
+		assert intent["doctype"] == "Customer"
+
+	def test_normalizes_month_dimension_to_year_month_when_year_missing(self):
+		raw = '{"mode": "analytics", "primary_doctype": "Sales Invoice", "dimensions": ["item_code", "MONTH(posting_date)"], "metrics": [{"func": "SUM", "field": "grand_total", "alias": "total_sales"}], "filters": [], "limit": 20}'
+		llm = _mock_llm(raw)
+		intent = generate_query_intent("monthly sales by item", "", "", llm)
+		assert intent["dimensions"] == ["item_code", "YEAR_MONTH(posting_date)"]
+
+	def test_keeps_explicit_year_and_month_dimensions_for_year_over_year_comparison(self):
+		raw = '{"mode": "analytics", "primary_doctype": "Sales Invoice", "dimensions": ["YEAR(posting_date)", "MONTH(posting_date)"], "metrics": [{"func": "SUM", "field": "grand_total", "alias": "total_sales"}], "filters": [], "limit": 20}'
+		llm = _mock_llm(raw)
+		intent = generate_query_intent("compare monthly sales by year", "", "", llm)
+		assert intent["dimensions"] == ["YEAR(posting_date)", "MONTH(posting_date)"]
+
 	def test_raises_on_non_json(self):
 		llm = _mock_llm("SELECT name FROM tabCustomer LIMIT 10")
 		with pytest.raises(ValueError, match="not valid JSON"):

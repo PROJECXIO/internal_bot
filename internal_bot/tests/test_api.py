@@ -151,8 +151,8 @@ class TestChatAPI(FrappeTestCase):
 			"status": "success",
 			"response_type": "empty",
 			"visualization": None,
-			"summary": "No results found.",
-			"markdown": "No results found.",
+			"summary": "I couldn't find any matching data for that request.",
+			"markdown": "I couldn't find any matching data for that request.",
 			"title": "Result",
 			"columns": [],
 			"rows": [],
@@ -171,7 +171,7 @@ class TestChatAPI(FrappeTestCase):
 
 		self.assertIn("meta", response)
 		self.assertIn("confidence", response["meta"])
-		self.assertEqual(response["markdown"], "No results found.")
+		self.assertEqual(response["markdown"], "I couldn't find any matching data for that request.")
 
 	def test_visual_payload_passes_through(self):
 		fake_response = {

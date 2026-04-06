@@ -122,3 +122,44 @@ class TestMemoryService(FrappeTestCase):
 		self.assertEqual(mem["last_user_question"], "total grand sales invoice per day")
 		self.assertEqual(mem["last_discovered_doctypes"], ["Sales Invoice"])
 		self.assertEqual(mem["last_assistant_response"]["title"], "Total grand sales invoice per day")
+
+	def test_load_chat_memory_keeps_latest_non_empty_discovered_doctypes(self):
+		save_message(
+			_TEST_SESSION,
+			"user",
+			"show sales by item",
+			status="success",
+			normalized_question="show sales by item",
+		)
+		save_message(
+			_TEST_SESSION,
+			"assistant",
+			"Returned 3 rows.",
+			status="success",
+			structured_response=frappe.as_json({
+				"status": "success",
+				"title": "Sales by item",
+				"summary": "Returned 3 rows.",
+				"columns": ["item_code", "total_sales"],
+				"rows": [{"item_code": "SKU-001", "total_sales": 1000}],
+			}),
+			discovered_entities=frappe.as_json(["Sales Invoice"]),
+		)
+		save_message(_TEST_SESSION, "user", "لا قصدي الاصناف الي مبيعاتها وقعت", status="success")
+		save_message(
+			_TEST_SESSION,
+			"assistant",
+			"هل تقصد توقفاً تاماً أم انخفاضاً كبيراً؟",
+			status="clarification_needed",
+			structured_response=frappe.as_json({
+				"status": "clarification_needed",
+				"question": "هل تقصد توقفاً تاماً أم انخفاضاً كبيراً؟",
+				"options": ["توقف تام", "انخفاض كبير"],
+			}),
+			discovered_entities=frappe.as_json([]),
+		)
+		frappe.db.commit()
+
+		mem = load_chat_memory(_TEST_SESSION, window_size=10)
+		self.assertEqual(mem["last_assistant_response"]["status"], "clarification_needed")
+		self.assertEqual(mem["last_discovered_doctypes"], ["Sales Invoice"])

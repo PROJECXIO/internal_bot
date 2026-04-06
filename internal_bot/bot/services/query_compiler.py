@@ -21,7 +21,7 @@ import frappe.utils
 from internal_bot.bot.services import permission_service
 
 _ALLOWED_FUNCS = frozenset({"SUM", "COUNT", "AVG", "MAX", "MIN", "COUNT_DISTINCT"})
-_DATE_EXTRACT_RE = re.compile(r"^(YEAR|MONTH|DAY|WEEK|DATE)\((.+)\)$", re.IGNORECASE)
+_DATE_EXTRACT_RE = re.compile(r"^(YEAR_MONTH|YEAR|MONTH|DAY|WEEK|DATE)\((.+)\)$", re.IGNORECASE)
 _ALLOWED_OPERATORS = frozenset({
     "=", "!=", ">", "<", ">=", "<=", "like", "in", "not in", "between", "is",
 })
@@ -75,7 +75,11 @@ def compile_analytics_intent(
             field_expr, _ = _resolve_field_reference(
                 field, primary, permitted_fields, join_field_permissions
             )
-            expr = f"{func}({field_expr})"
+            expr = (
+                f"DATE_FORMAT({field_expr}, '%%Y-%%m')"
+                if func == "YEAR_MONTH"
+                else f"{func}({field_expr})"
+            )
             select_parts.append(f"{expr} AS `{dim}`")
             group_by_parts.append(expr)
             dimension_aliases.append(dim)

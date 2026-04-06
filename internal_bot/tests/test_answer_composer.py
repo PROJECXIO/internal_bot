@@ -117,3 +117,33 @@ class TestAnswerComposer(FrappeTestCase):
 		self.assertEqual(payload["analysis_hints"]["series_column"], "item_code")
 		self.assertEqual(payload["analysis_hints"]["top_category_label"], "2025-09-16")
 		self.assertEqual(payload["analysis_hints"]["top_series_label"], "SKU004")
+
+	def test_empty_rows_use_answer_prefix_instead_of_generic_no_results(self):
+		llm = MagicMock()
+		llm.provider = "MockLLM"
+		llm.model = "mock-model"
+
+		state = {
+			"raw_message": "which items dropped after month five",
+			"normalized_question": "which items dropped after month five",
+			"query_result_rows": [],
+			"visualization_preference": "text",
+			"answer_prefix": "I couldn't find any items that have dropped after five months:",
+			"input_tokens": 0,
+			"output_tokens": 0,
+			"_llm_client": llm,
+			"node_trace": [],
+			"timing": {},
+		}
+
+		result = answer_composer.run(state)
+
+		self.assertEqual(
+			result["answer_markdown"],
+			"I couldn't find any items that have dropped after five months",
+		)
+		self.assertEqual(
+			result["formatted_response"]["markdown"],
+			"I couldn't find any items that have dropped after five months",
+		)
+		llm.chat_completion.assert_not_called()

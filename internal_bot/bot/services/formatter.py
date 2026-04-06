@@ -153,7 +153,10 @@ def _should_force_text_explanation(state: "GraphState", preference: str) -> bool
 		return False
 
 	last_response = state.get("last_assistant_response") or {}
-	return last_response.get("response_type") in {"bar_chart", "pie_chart", "line_chart", "metric_card", "table"}
+	return last_response.get("response_type") in {
+		"bar_chart", "pie_chart", "donut_chart", "line_chart", "area_chart",
+		"stacked_bar_chart", "metric_card", "table",
+	}
 
 
 def normalize_cached_response(cached_response: dict, state: "GraphState | dict | None" = None) -> dict:
@@ -347,7 +350,7 @@ def _build_success_visualization(
 	preference: str,
 ) -> tuple[str, dict | None, str]:
 	if not rows:
-		return "empty", None, "No results found."
+		return "empty", None, "I couldn't find any matching data for that request."
 
 	if preference == "text":
 		plain_summary = _build_plain_summary(rows, columns)
@@ -414,19 +417,19 @@ def _build_metric_visualization(rows: list[dict], columns: list[str], title: str
 
 
 def _build_chart_visualization(rows: list[dict], columns: list[str], title: str, preference: str) -> dict | None:
-	if preference not in {"bar", "pie", "line", "auto"}:
+	if preference not in {"bar", "pie", "donut", "line", "area", "stacked_bar", "auto"}:
 		return None
 
 	if len(columns) < 2:
 		return None
-	if len(rows) < 2 and preference not in {"bar", "line"}:
+	if len(rows) < 2 and preference not in {"bar", "line", "area"}:
 		return None
 
 	grouped_payload = _build_grouped_chart_visualization(rows, columns, title, preference)
 	if grouped_payload:
 		return grouped_payload
 
-	if len(rows) > 12 and preference != "line":
+	if len(rows) > 12 and preference not in {"line", "area"}:
 		return None
 
 	if len(columns) != 2:
@@ -451,12 +454,22 @@ def _build_chart_visualization(rows: list[dict], columns: list[str], title: str,
 
 	response_type = "bar_chart"
 	kind = "bar"
-	if _should_use_line_chart(preference, label_key, rows):
+	if _should_use_area_chart(preference, label_key, rows, value_key):
+		response_type = "area_chart"
+		kind = "area"
+	elif _should_use_line_chart(preference, label_key, rows):
 		response_type = "line_chart"
 		kind = "line"
 	elif _should_use_pie_chart(preference, title, values):
-		response_type = "pie_chart"
-		kind = "pie"
+		if preference == "pie":
+			response_type = "pie_chart"
+			kind = "pie"
+		else:
+			response_type = "donut_chart"
+			kind = "donut"
+	elif preference == "donut" and all(value >= 0 for value in values):
+		response_type = "donut_chart"
+		kind = "donut"
 
 	visualization = {
 		"kind": kind,
@@ -467,7 +480,7 @@ def _build_chart_visualization(rows: list[dict], columns: list[str], title: str,
 		"categories": categories,
 		"show_table_toggle": True,
 	}
-	if kind == "pie":
+	if kind in ("pie", "donut"):
 		visualization["series"] = values
 
 	return {
@@ -480,14 +493,14 @@ def _build_chart_visualization(rows: list[dict], columns: list[str], title: str,
 def _build_grouped_chart_visualization(rows: list[dict], columns: list[str], title: str, preference: str) -> dict | None:
 	if len(columns) < 3 or len(columns) > 6:
 		return None
-	if preference not in {"bar", "line"} and not _should_auto_use_grouped_chart(title):
+	if preference not in {"bar", "line", "stacked_bar"} and not _should_auto_use_grouped_chart(title):
 		return None
 
-	time_comparison_grouped_chart = _build_time_comparison_grouped_chart(rows, columns, title)
+	time_comparison_grouped_chart = _build_time_comparison_grouped_chart(rows, columns, title, preference)
 	if time_comparison_grouped_chart:
 		return time_comparison_grouped_chart
 
-	long_form_grouped_chart = _build_long_form_grouped_chart(rows, columns, title)
+	long_form_grouped_chart = _build_long_form_grouped_chart(rows, columns, title, preference)
 	if long_form_grouped_chart:
 		return long_form_grouped_chart
 
@@ -523,10 +536,11 @@ def _build_grouped_chart_visualization(rows: list[dict], columns: list[str], tit
 	if not any(any(value != 0 for value in metric["data"]) for metric in series):
 		return None
 
+	kind, response_type = _pick_grouped_kind(preference, label_key, rows, len(series), len(categories))
 	return {
-		"response_type": "bar_chart",
+		"response_type": response_type,
 		"visualization": {
-			"kind": "grouped_bar",
+			"kind": kind,
 			"layout": _detect_bar_layout(title),
 			"label_key": label_key,
 			"value_keys": numeric_keys,
@@ -538,7 +552,7 @@ def _build_grouped_chart_visualization(rows: list[dict], columns: list[str], tit
 	}
 
 
-def _build_long_form_grouped_chart(rows: list[dict], columns: list[str], title: str) -> dict | None:
+def _build_long_form_grouped_chart(rows: list[dict], columns: list[str], title: str, preference: str = "auto") -> dict | None:
 	if len(columns) != 3:
 		return None
 
@@ -590,10 +604,11 @@ def _build_long_form_grouped_chart(rows: list[dict], columns: list[str], title: 
 	if not any(any(value != 0 for value in metric["data"]) for metric in series):
 		return None
 
+	kind, response_type = _pick_grouped_kind(preference, label_key, rows, len(series), len(categories))
 	return {
-		"response_type": "bar_chart",
+		"response_type": response_type,
 		"visualization": {
-			"kind": "grouped_bar",
+			"kind": kind,
 			"layout": _detect_bar_layout(title),
 			"label_key": label_key,
 			"series_key": series_key,
@@ -606,7 +621,7 @@ def _build_long_form_grouped_chart(rows: list[dict], columns: list[str], title: 
 	}
 
 
-def _build_time_comparison_grouped_chart(rows: list[dict], columns: list[str], title: str) -> dict | None:
+def _build_time_comparison_grouped_chart(rows: list[dict], columns: list[str], title: str, preference: str = "auto") -> dict | None:
 	if len(columns) != 4:
 		return None
 
@@ -651,10 +666,11 @@ def _build_time_comparison_grouped_chart(rows: list[dict], columns: list[str], t
 	if not any(any(value != 0 for value in metric["data"]) for metric in series):
 		return None
 
+	kind, response_type = _pick_grouped_kind(preference, "month_day", rows, len(series), len(categories))
 	return {
-		"response_type": "bar_chart",
+		"response_type": response_type,
 		"visualization": {
-			"kind": "grouped_bar",
+			"kind": kind,
 			"layout": _detect_bar_layout(title),
 			"label_key": "month_day",
 			"series_key": "YEAR(posting_date)",
@@ -721,7 +737,7 @@ def _pick_chart_axes(rows: list[dict], columns: list[str]) -> tuple[str | None, 
 def _is_dimension_column_name(column: str) -> bool:
 	"""Return True if the column name looks like a SQL dimension function."""
 	name = (column or "").upper().strip()
-	return bool(re.match(r"^(MONTH|YEAR|DAY|QUARTER|WEEK|DAYOFWEEK|HOUR)\s*\(", name))
+	return bool(re.match(r"^(YEAR_MONTH|MONTH|YEAR|DAY|QUARTER|WEEK|DAYOFWEEK|HOUR)\s*\(", name))
 
 
 def _is_measure_column(rows: list[dict], column: str) -> bool:
@@ -815,6 +831,11 @@ def _pick_long_form_grouping_keys(rows: list[dict], dimension_keys: list[str], t
 			other_key = next(column for column in dimension_keys if column != date_key)
 			return date_key, other_key
 
+	year_month_key = next((column for column in dimension_keys if column.upper().startswith("YEAR_MONTH(")), None)
+	if year_month_key:
+		other_key = next(column for column in dimension_keys if column != year_month_key)
+		return year_month_key, other_key
+
 	# For YEAR+MONTH dimension pairs, use MONTH as label (x-axis) and YEAR as
 	# series (legend) so year-over-year comparison reads naturally.
 	year_key = next((k for k in dimension_keys if k.upper().startswith("YEAR(")), None)
@@ -827,10 +848,10 @@ def _pick_long_form_grouping_keys(rows: list[dict], dimension_keys: list[str], t
 
 def _is_date_like_column(rows: list[dict], column: str) -> bool:
 	column_name = (column or "").lower()
-	if "date" in column_name:
+	if "date" in column_name or "year_month" in column_name:
 		return True
 
-	pattern = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+	pattern = re.compile(r"^\d{4}-\d{2}(?:-\d{2})?$")
 	values = [row.get(column) for row in rows]
 	non_empty_values = [value for value in values if value not in (None, "")]
 	return bool(non_empty_values) and all(isinstance(value, str) and pattern.match(value) for value in non_empty_values)
@@ -860,6 +881,58 @@ def _should_use_line_chart(preference: str, label_key: str, rows: list[dict]) ->
 	if len(rows) <= 4:
 		return False
 	return _is_dimension_column_name(label_key) or _is_date_like_column(rows, label_key)
+
+
+def _should_use_area_chart(preference: str, label_key: str, rows: list[dict], value_key: str) -> bool:
+	if preference == "area":
+		return True
+	if preference != "auto":
+		return False
+	if len(rows) <= 4:
+		return False
+	if not (_is_dimension_column_name(label_key) or _is_date_like_column(rows, label_key)):
+		return False
+
+	value_name = (value_key or "").lower()
+	return any(
+		hint in value_name
+		for hint in ("total", "amount", "revenue", "sales")
+	)
+
+
+def _should_use_stacked_bar(preference: str, series_count: int, category_count: int) -> bool:
+	if preference == "stacked_bar":
+		return True
+	if preference != "auto":
+		return False
+	return series_count >= 3 and category_count <= 8
+
+
+def _should_use_grouped_line(preference: str, label_key: str, rows: list[dict]) -> bool:
+	if preference == "line":
+		return True
+	if preference != "auto":
+		return False
+	label_name = (label_key or "").lower()
+	return (
+		_is_dimension_column_name(label_key)
+		or _is_date_like_column(rows, label_key)
+		or label_name in {"month_day"}
+	)
+
+
+def _pick_grouped_kind(
+	preference: str,
+	label_key: str,
+	rows: list[dict],
+	series_count: int,
+	category_count: int,
+) -> tuple[str, str]:
+	if _should_use_grouped_line(preference, label_key, rows):
+		return "grouped_line", "line_chart"
+	if _should_use_stacked_bar(preference, series_count, category_count):
+		return "stacked_bar", "stacked_bar_chart"
+	return "grouped_bar", "bar_chart"
 
 
 def _should_use_pie_chart(preference: str, title: str, values: Sequence[float]) -> bool:
@@ -917,7 +990,7 @@ def _summarize_chart(categories: Sequence[str], values: Sequence[float], value_k
 	max_index = max(range(len(values)), key=lambda idx: values[idx])
 	leader = categories[max_index]
 	leader_value = _format_metric_value(values[max_index])
-	if kind == "pie":
+	if kind in {"pie", "donut"}:
 		return f"{leader} has the largest share at {leader_value} {value_key.replace('_', ' ')}."
 	return f"{leader} is highest at {leader_value} {value_key.replace('_', ' ')}."
 

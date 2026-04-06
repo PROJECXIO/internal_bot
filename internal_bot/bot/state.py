@@ -57,10 +57,10 @@ class GraphState(TypedDict, total=False):
 
     # ── Node 7: Result Formatter ─────────────────────────────────────
     formatted_response: dict    # final API response
-    response_type: str          # "metric_card" | "bar_chart" | "pie_chart" | "table" | "empty"
+    response_type: str          # "metric_card" | "bar_chart" | "pie_chart" | "donut_chart" | "line_chart" | "area_chart" | "stacked_bar_chart" | "table" | "empty"
     visualization: Optional[dict]
     summary: str
-    visualization_preference: str  # "auto" | "card" | "bar" | "pie" | "line" | "text"
+    visualization_preference: str  # "auto" | "card" | "bar" | "pie" | "donut" | "line" | "area" | "stacked_bar" | "text"
     answer_prefix: str             # friendly intro sentence, e.g. "Here's what I found:"
     answer_markdown: str           # markdown answer or brief shown in the frontend
 

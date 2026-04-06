@@ -79,6 +79,21 @@ _REFINEMENT_FOLLOW_UP_PATTERNS = (
 	r"\bsignificant(ly)?\b",
 )
 
+_CLARIFICATION_CORRECTION_PREFIXES = (
+	"no i mean",
+	"i mean",
+	"actually",
+	"rather",
+	"لا قصدي",
+	"لا اقصد",
+	"لا اقصد ان",
+	"قصدي",
+	"اقصد",
+	"اقصد ان",
+	"يعني",
+	"المقصود",
+)
+
 
 def run(state: GraphState) -> dict:
 	t0 = time.monotonic()
@@ -90,6 +105,19 @@ def run(state: GraphState) -> dict:
 	raw = (state.get("raw_message") or "").strip()
 	llm_client = state.get("_llm_client")  # injected by graph entry
 	trace.detail(state, "Question", raw)
+
+	clarification_answer = _build_clarification_answer_query(state, raw)
+	if clarification_answer:
+		trace.detail(state, "Clarification answer detected", clarification_answer)
+		return _update(state, node_name, t0, {
+			"intent": "query",
+			"intent_reason": "",
+			"normalized_question": clarification_answer,
+			"clarification_options": [],
+			# Keep clarification answers in the same query thread so schema
+			# discovery can boost the prior DocType context if available.
+			"follow_up_to_previous_result": True,
+		}, log_t0)
 
 	follow_up_normalized = _build_follow_up_question(state, raw)
 	if follow_up_normalized:
@@ -208,6 +236,79 @@ def _normalize(text: str) -> str:
 	text = re.sub(r"[^\w\s]", " ", text)
 	text = re.sub(r"\s+", " ", text)
 	return text.strip()
+
+
+def _build_clarification_answer_query(state: GraphState, raw: str) -> str:
+	raw_normalized = _normalize(raw)
+	if not raw_normalized or not _assistant_just_asked_for_clarification(state):
+		return ""
+
+	cleaned = _strip_clarification_prefix(raw_normalized)
+	if not cleaned:
+		return ""
+
+	has_explicit_correction = cleaned != raw_normalized
+	is_short_answer = len(cleaned.split()) <= 4
+	matches_option = _matches_clarification_option(cleaned, state)
+	if not (has_explicit_correction or is_short_answer or matches_option):
+		return ""
+
+	base_question = (
+		state.get("last_non_follow_up_user_question")
+		or state.get("last_user_question")
+		or ""
+	).strip()
+	if not base_question:
+		return cleaned
+
+	# Very short clarification answers need the prior question context to stay useful.
+	if not has_explicit_correction and len(cleaned.split()) <= 4 and cleaned not in base_question:
+		return f"{base_question} {cleaned}".strip()
+
+	return cleaned
+
+
+def _assistant_just_asked_for_clarification(state: GraphState) -> bool:
+	last_assistant = state.get("last_assistant_response") or {}
+	if last_assistant.get("status") == "clarification_needed":
+		return True
+	if last_assistant.get("question") or last_assistant.get("options"):
+		return True
+
+	history = state.get("chat_history") or []
+	if not history:
+		return False
+
+	last_message = history[-1]
+	if last_message.get("role") != "assistant":
+		return False
+
+	content = (last_message.get("content") or "").strip()
+	return "?" in content or "؟" in content
+
+
+def _strip_clarification_prefix(normalized_text: str) -> str:
+	cleaned = normalized_text.strip()
+	changed = True
+	while changed and cleaned:
+		changed = False
+		for prefix in _CLARIFICATION_CORRECTION_PREFIXES:
+			if cleaned.startswith(prefix + " "):
+				cleaned = cleaned[len(prefix) :].strip()
+				changed = True
+				break
+			if cleaned == prefix:
+				cleaned = ""
+				changed = True
+				break
+	return cleaned
+
+
+def _matches_clarification_option(normalized_text: str, state: GraphState) -> bool:
+	last_assistant = state.get("last_assistant_response") or {}
+	options = last_assistant.get("options") or []
+	normalized_options = {_normalize(option) for option in options if option}
+	return normalized_text in normalized_options
 
 
 def _build_follow_up_question(state: GraphState, raw: str) -> str:

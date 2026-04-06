@@ -9,8 +9,37 @@ import frappe
 
 from internal_bot.bot.services.text_normalizer import normalize_phrase_for_match, normalize_text
 
-_ALIAS_CACHE_KEY = "internal_bot:doctype_aliases:v1"
+_ALIAS_CACHE_KEY = "internal_bot:doctype_aliases:v2"
 _ALIAS_CACHE_TTL = 30 * 60
+
+_DEFAULT_ALIASES_BY_DOCTYPE: dict[str, list[str]] = {
+    "Sales Invoice": [
+        "مبيعات",
+        "فاتورة مبيعات",
+        "فواتير مبيعات",
+        "ايراد",
+        "ايرادات",
+    ],
+    "Sales Order": [
+        "طلب بيع",
+        "طلبات بيع",
+    ],
+    "Item": [
+        "صنف",
+        "اصناف",
+        "منتج",
+        "منتجات",
+        "sku",
+    ],
+    "Customer": [
+        "عميل",
+        "عملاء",
+    ],
+    "Supplier": [
+        "مورد",
+        "موردين",
+    ],
+}
 
 
 def get_alias_index() -> dict[str, str]:
@@ -58,6 +87,18 @@ def _get_alias_payload() -> dict:
         alias_to_doctypes[normalized_alias].add(doctype)
         if match_alias:
             alias_to_doctypes[match_alias].add(doctype)
+
+    for doctype, aliases in _DEFAULT_ALIASES_BY_DOCTYPE.items():
+        for alias in aliases:
+            normalized_alias = normalize_text(alias)
+            match_alias = normalize_phrase_for_match(alias)
+            if not normalized_alias:
+                continue
+            by_doctype[doctype].append(alias)
+            if normalized_alias not in alias_to_doctypes:
+                alias_to_doctypes[normalized_alias].add(doctype)
+            if match_alias and match_alias not in alias_to_doctypes:
+                alias_to_doctypes[match_alias].add(doctype)
 
     index = {
         alias: next(iter(sorted(doctypes)))

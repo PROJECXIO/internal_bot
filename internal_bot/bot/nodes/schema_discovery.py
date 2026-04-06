@@ -4,6 +4,7 @@ Node 3 — Schema Discovery
 Hybrid schema retrieval using multilingual normalization, aliases,
 lexical overlap, and optional embeddings.
 """
+import re
 import time
 
 import frappe
@@ -13,6 +14,8 @@ from internal_bot.bot.services import hybrid_scorer, schema_corpus
 from internal_bot.bot.services.text_normalizer import normalize_text, remove_stop_words, tokenize
 from internal_bot.bot.state import GraphState
 from internal_bot.bot import progress, trace
+
+_FOLLOW_UP_IDENTIFIER_RE = re.compile(r"(?:[a-z]+[-_]?\d+|\d{4})", re.IGNORECASE)
 
 
 def run(state: GraphState) -> dict:
@@ -64,7 +67,14 @@ def run(state: GraphState) -> dict:
     )
     decision, selected_candidates = hybrid_scorer.classify_confidence(candidates)
     previous_doctypes = set(state.get("last_discovered_doctypes") or [])
-    if previous_doctypes and decision in ("ambiguous", "low_confidence"):
+    if (
+        previous_doctypes
+        and decision in ("ambiguous", "low_confidence")
+        and _should_prefer_previous_doctype(
+            query_tokens=query_tokens,
+            follow_up_to_previous_result=bool(state.get("follow_up_to_previous_result")),
+        )
+    ):
         preferred = next(
             (candidate for candidate in selected_candidates if candidate.doctype_name in previous_doctypes),
             None,
@@ -122,3 +132,17 @@ def _update(state: GraphState, node_name: str, t0: float, updates: dict, log_t0:
     from internal_bot.bot import trace as bench_trace
     bench_trace.node_end(state, node_name, log_t0)
     return {**updates, "node_trace": trace, "timing": timing}
+
+
+def _should_prefer_previous_doctype(
+    query_tokens: list[str],
+    follow_up_to_previous_result: bool,
+) -> bool:
+    if not follow_up_to_previous_result:
+        return False
+    compact_tokens = [token for token in query_tokens if token]
+    if not compact_tokens:
+        return True
+    if len(compact_tokens) > 3:
+        return False
+    return not any(_FOLLOW_UP_IDENTIFIER_RE.search(token) for token in compact_tokens)

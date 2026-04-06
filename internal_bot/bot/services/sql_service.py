@@ -114,8 +114,10 @@ Use COUNT(*) if the question does not specify a numeric field, or SUM(field) \
 if a specific amount field is implied.
 16. For time-based grouping ("per year", "per month", "per day", "per week"), \
 use date extraction functions in dimensions: YEAR(fieldname), MONTH(fieldname), \
-DAY(fieldname), DATE(fieldname), WEEK(fieldname). The inner field must be a \
-valid date field from the schema (e.g. "per year" → "YEAR(posting_date)").
+YEAR_MONTH(fieldname), DAY(fieldname), DATE(fieldname), WEEK(fieldname). The inner field must be a \
+valid date field from the schema (e.g. "per year" → "YEAR(posting_date)"). \
+For monthly grouping across open-ended or multi-year data, prefer YEAR_MONTH(fieldname) \
+so months from different years stay separate.
 17. NEVER include SQL table names, backticks, or SQL expressions like \
 `tabSales Invoice`.grand_total in fields, dimensions, filters, or date_range.field. \
 Use plain field names only, like "grand_total", "item_code", or "DATE(posting_date)".
@@ -193,9 +195,18 @@ def _parse_intent(raw: str) -> dict:
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError as exc:
-        raise ValueError(
-            f"LLM response was not valid JSON: {exc}\nRaw response: {raw!r}"
-        ) from exc
+        repaired = _repair_json_like_string(cleaned)
+        if repaired != cleaned:
+            try:
+                data = json.loads(repaired)
+            except json.JSONDecodeError:
+                raise ValueError(
+                    f"LLM response was not valid JSON: {exc}\nRaw response: {raw!r}"
+                ) from exc
+        else:
+            raise ValueError(
+                f"LLM response was not valid JSON: {exc}\nRaw response: {raw!r}"
+            ) from exc
 
     if not isinstance(data, dict):
         raise ValueError(f"Expected a JSON object, got {type(data).__name__}. Raw: {raw!r}")
@@ -215,7 +226,7 @@ def _parse_intent(raw: str) -> dict:
     if mode == "analytics" and not data.get("metrics"):
         raise ValueError(f"Analytics intent missing 'metrics'. Raw: {raw!r}")
 
-    return data
+    return _normalize_time_dimensions(data)
 
 def _extract_json_block(raw: str) -> str:
     """Strip Markdown fences and whitespace from the LLM response."""
@@ -223,6 +234,84 @@ def _extract_json_block(raw: str) -> str:
     if match:
         return match.group(1).strip()
     return raw.strip()
+
+
+def _repair_json_like_string(raw: str) -> str:
+    """Repair minor JSON-like issues from LLM output before giving up."""
+    cleaned = (raw or "").strip()
+    if not cleaned:
+        return cleaned
+
+    object_start = cleaned.find("{")
+    object_end = cleaned.rfind("}")
+    if object_start != -1 and object_end != -1 and object_start < object_end:
+        cleaned = cleaned[object_start : object_end + 1]
+
+    cleaned = (
+        cleaned.replace("“", '"')
+        .replace("”", '"')
+        .replace("‘", "'")
+        .replace("’", "'")
+    )
+    cleaned = re.sub(r"/\*[\s\S]*?\*/", "", cleaned)
+    cleaned = re.sub(r"(^|\s)//.*?$", r"\1", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r",\s*([}\]])", r"\1", cleaned)
+    cleaned = re.sub(r'([{\[,]\s*)([A-Za-z_][A-Za-z0-9_()\-]*)(\s*:)', r'\1"\2"\3', cleaned)
+    cleaned = re.sub(
+        r"'([^'\\]*(?:\\.[^'\\]*)*)'",
+        lambda match: '"' + match.group(1).replace('"', '\\"') + '"',
+        cleaned,
+    )
+    return cleaned.strip()
+
+
+_MONTH_DIM_RE = re.compile(r"^MONTH\((.+)\)$", re.IGNORECASE)
+_YEAR_DIM_RE = re.compile(r"^YEAR\((.+)\)$", re.IGNORECASE)
+_YEAR_MONTH_DIM_RE = re.compile(r"^YEAR_MONTH\((.+)\)$", re.IGNORECASE)
+
+
+def _normalize_time_dimensions(intent: dict) -> dict:
+    """Prevent month buckets from collapsing across different years."""
+    if intent.get("mode") != "analytics":
+        return intent
+
+    dimensions = intent.get("dimensions") or []
+    if not dimensions:
+        return intent
+
+    year_fields = {
+        match.group(1).strip()
+        for dim in dimensions
+        if (match := _YEAR_DIM_RE.match(dim or ""))
+    }
+    year_month_fields = {
+        match.group(1).strip()
+        for dim in dimensions
+        if (match := _YEAR_MONTH_DIM_RE.match(dim or ""))
+    }
+
+    normalized_dimensions = []
+    changed = False
+    for dim in dimensions:
+        month_match = _MONTH_DIM_RE.match(dim or "")
+        if not month_match:
+            normalized_dimensions.append(dim)
+            continue
+
+        field = month_match.group(1).strip()
+        if field in year_fields or field in year_month_fields:
+            normalized_dimensions.append(dim)
+            continue
+
+        normalized_dimensions.append(f"YEAR_MONTH({field})")
+        changed = True
+
+    if not changed:
+        return intent
+
+    normalized_intent = dict(intent)
+    normalized_intent["dimensions"] = normalized_dimensions
+    return normalized_intent
 
 
 # ------------------------------------------------------------------

@@ -80,6 +80,17 @@ def run(state: GraphState) -> dict:
 		rows = state.get("query_result_rows") or []
 		analysis_mode = _is_analysis_request(state)
 		preview_response = format_structured_response({**state, "answer_markdown": state.get("answer_markdown") or ""})
+		if not rows:
+			return _update(
+				state,
+				node_name,
+				t0,
+				_finalize_success_state(
+					state,
+					{"answer_markdown": _build_empty_result_markdown(state, preview_response)},
+				),
+				log_t0,
+			)
 		response_type = preview_response.get("response_type")
 		preview_visualization = preview_response.get("visualization") or {}
 		row_limit = _determine_row_limit(
@@ -446,6 +457,18 @@ def _format_number(value) -> str:
 		return f"{int(number):,}"
 
 	return f"{number:,.2f}".rstrip("0").rstrip(".")
+
+
+def _build_empty_result_markdown(state: GraphState, preview_response: dict) -> str:
+	prefix = (state.get("answer_prefix") or "").strip()
+	if prefix:
+		return re.sub(r"[\s:.-]+$", "", prefix)
+
+	summary = (preview_response.get("summary") or "").strip()
+	if summary:
+		return summary
+
+	return "I couldn't find any matching data for that request."
 
 
 def _finalize_success_state(state: GraphState, updates: dict) -> dict:

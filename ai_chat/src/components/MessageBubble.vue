@@ -334,7 +334,19 @@
 
       <!-- Bot: empty success -->
       <template v-else-if="message.status === 'success'">
-        <span class="italic text-gray-400">No results found.</span>
+        <div class="space-y-2">
+          <p v-if="message.answerPrefix" class="text-sm font-medium text-slate-600">
+            {{ message.answerPrefix }}
+          </p>
+          <div
+            v-if="message.markdown"
+            class="prose-chat prose-chat--structured break-words text-slate-800"
+            v-html="renderMarkdown(message.markdown)"
+          />
+          <p v-else class="italic text-gray-400">
+            {{ message.summary || "No results found." }}
+          </p>
+        </div>
       </template>
 
       <!-- Bot: clarification needed -->
@@ -485,7 +497,7 @@ const closeIconSvg = `
 `.trim();
 
 const isChartResponse = computed(() =>
-  ["bar_chart", "pie_chart", "line_chart"].includes(props.message.responseType)
+  ["bar_chart", "pie_chart", "donut_chart", "line_chart", "area_chart", "stacked_bar_chart"].includes(props.message.responseType)
 );
 
 const bubbleStyle = computed(() => {
@@ -501,7 +513,9 @@ const inlineChartHeight = computed(() => (isInlineChartExpanded.value ? 420 : 26
 const chartType = computed(() => {
   const kind = props.message.visualization?.kind;
   if (kind === "pie") return "pie";
-  if (kind === "line") return "line";
+  if (kind === "donut") return "donut";
+  if (kind === "line" || kind === "grouped_line") return "line";
+  if (kind === "area") return "area";
   return "bar";
 });
 
@@ -574,7 +588,7 @@ const chartSeries = computed(() => {
   const visualization = props.message.visualization;
   if (!visualization) return [];
 
-  if (visualization.kind === "pie") {
+  if (["pie", "donut"].includes(visualization.kind)) {
     return visualization.series || [];
   }
 
@@ -587,7 +601,7 @@ const chartSeries = computed(() => {
 // Compute highest/lowest indices for bar charts
 const chartHighLow = computed(() => {
   const visualization = props.message.visualization;
-  if (!visualization || visualization.kind === "pie" || visualization.kind === "grouped_bar") return null;
+  if (!visualization || ["pie", "donut", "grouped_bar", "stacked_bar", "grouped_line"].includes(visualization.kind)) return null;
 
   const data = visualization.series?.[0]?.data || [];
   if (data.length < 2) return null;
@@ -606,9 +620,11 @@ const chartHighLow = computed(() => {
 function buildChartOptions(expanded = false) {
   const visualization = props.message.visualization;
   const categories = visualization?.categories || [];
+  const groupedKinds = ["grouped_bar", "stacked_bar", "grouped_line"];
   const valueLabel = visualization?.value_key?.replaceAll("_", " ")
-    || (visualization?.kind === "grouped_bar" ? "Metrics" : "Value");
+    || (groupedKinds.includes(visualization?.kind) ? "Metrics" : "Value");
   const isGroupedBar = visualization?.kind === "grouped_bar";
+  const isStackedBar = visualization?.kind === "stacked_bar";
   const isHorizontal = visualization?.layout === "horizontal";
 
   if (visualization?.kind === "pie") {
@@ -629,6 +645,49 @@ function buildChartOptions(expanded = false) {
       },
       dataLabels: {
         enabled: true,
+      },
+      colors: ["#0f766e", "#14b8a6", "#5eead4", "#99f6e4", "#134e4a", "#2dd4bf"],
+      tooltip: {
+        y: {
+          formatter: (value) => formatChartValue(value),
+        },
+      },
+    };
+  }
+
+  if (visualization?.kind === "donut") {
+    return {
+      chart: {
+        toolbar: {
+          show: true,
+          tools: { download: downloadIconSvg, selection: false, zoom: false, zoomin: false, zoomout: false, pan: false, reset: false },
+        },
+      },
+      labels: categories,
+      legend: {
+        position: "bottom",
+        fontSize: expanded ? "13px" : "12px",
+      },
+      stroke: {
+        colors: ["#ffffff"],
+      },
+      dataLabels: {
+        enabled: true,
+      },
+      plotOptions: {
+        pie: {
+          donut: {
+            size: "55%",
+            labels: {
+              show: true,
+              total: {
+                show: true,
+                label: "Total",
+                formatter: (w) => formatChartValue((w?.globals?.seriesTotals || []).reduce((sum, value) => sum + value, 0)),
+              },
+            },
+          },
+        },
       },
       colors: ["#0f766e", "#14b8a6", "#5eead4", "#99f6e4", "#134e4a", "#2dd4bf"],
       tooltip: {
@@ -664,6 +723,110 @@ function buildChartOptions(expanded = false) {
       legend: { show: false },
       colors: ["#0f766e"],
       tooltip: {
+        y: { formatter: (value) => formatChartValue(value) },
+      },
+    };
+  }
+
+  if (visualization?.kind === "grouped_line") {
+    return {
+      chart: {
+        toolbar: {
+          show: true,
+          tools: { download: downloadIconSvg, selection: false, zoom: false, zoomin: false, zoomout: false, pan: false, reset: false },
+        },
+      },
+      stroke: { curve: "smooth", width: 3 },
+      markers: { size: 4, hover: { sizeOffset: 2 } },
+      dataLabels: { enabled: false },
+      xaxis: {
+        categories,
+        labels: {
+          rotate: expanded ? -12 : -20,
+          style: { fontSize: expanded ? "12px" : "11px" },
+        },
+      },
+      yaxis: {
+        title: { text: valueLabel },
+        labels: { formatter: (value) => formatChartValue(value) },
+      },
+      legend: { position: "bottom", fontSize: expanded ? "13px" : "12px" },
+      colors: ["#0f766e", "#14b8a6", "#5eead4", "#134e4a", "#2dd4bf", "#f59e0b"],
+      tooltip: {
+        shared: true,
+        intersect: false,
+        y: { formatter: (value) => formatChartValue(value) },
+      },
+    };
+  }
+
+  if (visualization?.kind === "area") {
+    return {
+      chart: {
+        toolbar: {
+          show: true,
+          tools: { download: downloadIconSvg, selection: false, zoom: false, zoomin: false, zoomout: false, pan: false, reset: false },
+        },
+      },
+      stroke: { curve: "smooth", width: 2 },
+      fill: {
+        type: "gradient",
+        gradient: { shadeIntensity: 1, opacityFrom: 0.45, opacityTo: 0.05, stops: [0, 100] },
+      },
+      dataLabels: { enabled: false },
+      xaxis: {
+        categories,
+        labels: {
+          rotate: expanded ? -12 : -20,
+          style: { fontSize: expanded ? "12px" : "11px" },
+        },
+      },
+      yaxis: {
+        title: { text: valueLabel },
+        labels: { formatter: (value) => formatChartValue(value) },
+      },
+      legend: { show: false },
+      colors: ["#0f766e"],
+      tooltip: {
+        y: { formatter: (value) => formatChartValue(value) },
+      },
+    };
+  }
+
+  if (isStackedBar) {
+    return {
+      chart: {
+        stacked: true,
+        toolbar: {
+          show: true,
+          tools: { download: downloadIconSvg, selection: false, zoom: false, zoomin: false, zoomout: false, pan: false, reset: false },
+        },
+      },
+      plotOptions: {
+        bar: {
+          horizontal: isHorizontal,
+          borderRadius: 4,
+          columnWidth: isHorizontal ? undefined : "56%",
+          barHeight: isHorizontal ? "58%" : undefined,
+        },
+      },
+      xaxis: {
+        categories,
+        labels: {
+          rotate: isHorizontal ? 0 : expanded ? -12 : -20,
+          style: { fontSize: expanded ? "12px" : "11px" },
+        },
+      },
+      yaxis: {
+        title: { text: valueLabel },
+        labels: { formatter: (value) => formatChartValue(value) },
+      },
+      legend: { position: "bottom", fontSize: expanded ? "13px" : "12px" },
+      dataLabels: { enabled: false },
+      colors: ["#0f766e", "#14b8a6", "#5eead4", "#99f6e4", "#134e4a", "#2dd4bf"],
+      tooltip: {
+        shared: true,
+        intersect: false,
         y: { formatter: (value) => formatChartValue(value) },
       },
     };

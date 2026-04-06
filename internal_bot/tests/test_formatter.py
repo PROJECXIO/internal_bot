@@ -1,6 +1,10 @@
 from frappe.tests.utils import FrappeTestCase
 
-from internal_bot.bot.services.formatter import format_structured_response, normalize_cached_response
+from internal_bot.bot.services.formatter import (
+	format_structured_response,
+	normalize_cached_response,
+	_is_dimension_column_name,
+)
 
 
 class TestStructuredFormatter(FrappeTestCase):
@@ -385,3 +389,147 @@ class TestStructuredFormatter(FrappeTestCase):
 			response["debug"]["context_window"]["question_context"]["discovered_doctypes"],
 			["Sales Invoice"],
 		)
+
+	def test_is_dimension_column_name(self):
+		self.assertTrue(_is_dimension_column_name("MONTH(posting_date)"))
+		self.assertTrue(_is_dimension_column_name("YEAR(posting_date)"))
+		self.assertTrue(_is_dimension_column_name("DAY(posting_date)"))
+		self.assertTrue(_is_dimension_column_name("QUARTER(posting_date)"))
+		self.assertTrue(_is_dimension_column_name("WEEK(posting_date)"))
+		self.assertFalse(_is_dimension_column_name("total_sales"))
+		self.assertFalse(_is_dimension_column_name("item_code"))
+		self.assertFalse(_is_dimension_column_name("grand_total"))
+
+	def test_year_month_total_three_numeric_columns_produce_grouped_chart(self):
+		"""The user's exact failing case: YEAR+MONTH+total_sales, all numeric."""
+		response = format_structured_response(
+			{
+				**self._base_state(
+					[
+						{"YEAR(posting_date)": 2025, "MONTH(posting_date)": 9, "total_sales": 281000},
+						{"YEAR(posting_date)": 2026, "MONTH(posting_date)": 2, "total_sales": 15000},
+						{"YEAR(posting_date)": 2026, "MONTH(posting_date)": 3, "total_sales": 67000},
+						{"YEAR(posting_date)": 2026, "MONTH(posting_date)": 4, "total_sales": 60000},
+						{"YEAR(posting_date)": 2026, "MONTH(posting_date)": 5, "total_sales": 20000},
+					],
+					message="compare monthly sales between this year and last year",
+				),
+				"visualization_preference": "bar",
+			}
+		)
+
+		self.assertEqual(response["response_type"], "bar_chart")
+		self.assertEqual(response["visualization"]["kind"], "grouped_bar")
+		self.assertEqual(response["visualization"]["value_key"], "total_sales")
+		# MONTH should be label (x-axis), YEAR should be series (legend)
+		self.assertEqual(response["visualization"]["label_key"], "MONTH(posting_date)")
+		self.assertEqual(response["visualization"]["series_key"], "YEAR(posting_date)")
+		self.assertIsNotNone(response["visualization"]["series"])
+
+	def test_month_total_two_numeric_columns_produce_bar_chart(self):
+		"""Two-column case where both are numeric but MONTH is a dimension."""
+		response = format_structured_response(
+			self._base_state(
+				[
+					{"MONTH(posting_date)": 1, "total_sales": 50000},
+					{"MONTH(posting_date)": 2, "total_sales": 60000},
+					{"MONTH(posting_date)": 3, "total_sales": 70000},
+				],
+				message="show sales by month",
+			)
+		)
+
+		self.assertIn(response["response_type"], {"bar_chart", "line_chart"})
+		self.assertIsNotNone(response["visualization"])
+		self.assertEqual(response["visualization"]["label_key"], "MONTH(posting_date)")
+		self.assertEqual(response["visualization"]["value_key"], "total_sales")
+
+	def test_line_preference_returns_line_chart(self):
+		"""Explicit line preference produces line_chart response."""
+		response = format_structured_response(
+			{
+				**self._base_state(
+					[
+						{"MONTH(posting_date)": i, "total_sales": i * 10000}
+						for i in range(1, 7)
+					],
+					message="show monthly sales trend",
+				),
+				"visualization_preference": "line",
+			}
+		)
+
+		self.assertEqual(response["response_type"], "line_chart")
+		self.assertEqual(response["visualization"]["kind"], "line")
+		self.assertEqual(response["visualization"]["label_key"], "MONTH(posting_date)")
+
+	def test_auto_temporal_many_rows_picks_line(self):
+		"""Auto preference with 12 monthly rows should auto-detect line chart."""
+		response = format_structured_response(
+			self._base_state(
+				[
+					{"MONTH(posting_date)": i, "total_sales": i * 10000}
+					for i in range(1, 13)
+				],
+				message="show monthly sales trend",
+			)
+		)
+
+		self.assertEqual(response["response_type"], "line_chart")
+		self.assertEqual(response["visualization"]["kind"], "line")
+
+	def test_auto_temporal_few_rows_stays_bar(self):
+		"""Auto preference with only 3 temporal rows should stay as bar chart."""
+		response = format_structured_response(
+			self._base_state(
+				[
+					{"MONTH(posting_date)": i, "total_sales": i * 10000}
+					for i in range(1, 4)
+				],
+				message="show sales by month",
+			)
+		)
+
+		self.assertEqual(response["response_type"], "bar_chart")
+		self.assertEqual(response["visualization"]["kind"], "bar")
+
+	def test_many_series_bucketed_into_others(self):
+		"""When more than 6 series exist, extras are merged into 'Others'."""
+		rows = []
+		# Use posting_date (string) as label and many item_codes as series
+		for date in ("2025-09-01", "2025-09-16"):
+			for i in range(1, 10):
+				rows.append({
+					"posting_date": date,
+					"item_code": f"SKU{i:03d}",
+					"total_sales": i * 10000,
+				})
+		response = format_structured_response(
+			{
+				**self._base_state(rows, message="compare item sales per day"),
+				"visualization_preference": "bar",
+			}
+		)
+
+		self.assertEqual(response["response_type"], "bar_chart")
+		self.assertEqual(response["visualization"]["kind"], "grouped_bar")
+		series_names = [s["name"] for s in response["visualization"]["series"]]
+		# Should have at most 7 series (top 6 + Others)
+		self.assertLessEqual(len(series_names), 7)
+		self.assertIn("Others", series_names)
+
+	def test_single_row_with_bar_preference_produces_bar_chart(self):
+		"""When only 1 item exists but user asks to compare, show bar chart."""
+		response = format_structured_response(
+			{
+				**self._base_state(
+					[{"item_code": "SKU004", "total_sales": 60000}],
+					message="compare item sales this month",
+				),
+				"visualization_preference": "bar",
+			}
+		)
+
+		self.assertEqual(response["response_type"], "bar_chart")
+		self.assertEqual(response["visualization"]["kind"], "bar")
+		self.assertEqual(response["visualization"]["categories"], ["SKU004"])

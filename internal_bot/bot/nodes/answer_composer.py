@@ -51,6 +51,7 @@ Rules:
 - In `analysis_mode`, avoid row-by-row narration unless the dataset is tiny and that is the clearest way to explain the insight.
 - In `analysis_mode`, prefer 2-4 insight bullets grounded in the data.
 - If the data is too limited for a strong conclusion, say that briefly instead of inventing a pattern.
+- If `row_count` is 1 and the question asks to compare or list multiple items/categories, explicitly note that **only** one result was found for the period (e.g. "**SKU004** is the **only** item with sales this month"). Bold the word **only** to draw attention.
 
 Examples:
 - Good comparison brief:

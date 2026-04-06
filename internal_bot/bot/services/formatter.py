@@ -151,7 +151,7 @@ def _should_force_text_explanation(state: "GraphState", preference: str) -> bool
 		return False
 
 	last_response = state.get("last_assistant_response") or {}
-	return last_response.get("response_type") in {"bar_chart", "pie_chart", "metric_card", "table"}
+	return last_response.get("response_type") in {"bar_chart", "pie_chart", "line_chart", "metric_card", "table"}
 
 
 def normalize_cached_response(cached_response: dict, state: "GraphState | dict | None" = None) -> dict:
@@ -381,17 +381,19 @@ def _build_metric_visualization(rows: list[dict], columns: list[str], title: str
 
 
 def _build_chart_visualization(rows: list[dict], columns: list[str], title: str, preference: str) -> dict | None:
-	if preference not in {"bar", "pie", "auto"}:
+	if preference not in {"bar", "pie", "line", "auto"}:
 		return None
 
-	if len(rows) < 2 or len(columns) < 2:
+	if len(columns) < 2:
+		return None
+	if len(rows) < 2 and preference not in {"bar", "line"}:
 		return None
 
 	grouped_payload = _build_grouped_chart_visualization(rows, columns, title, preference)
 	if grouped_payload:
 		return grouped_payload
 
-	if len(rows) > 12:
+	if len(rows) > 12 and preference != "line":
 		return None
 
 	if len(columns) != 2:
@@ -416,7 +418,10 @@ def _build_chart_visualization(rows: list[dict], columns: list[str], title: str,
 
 	response_type = "bar_chart"
 	kind = "bar"
-	if _should_use_pie_chart(preference, title, values):
+	if _should_use_line_chart(preference, label_key, rows):
+		response_type = "line_chart"
+		kind = "line"
+	elif _should_use_pie_chart(preference, title, values):
 		response_type = "pie_chart"
 		kind = "pie"
 
@@ -442,7 +447,7 @@ def _build_chart_visualization(rows: list[dict], columns: list[str], title: str,
 def _build_grouped_chart_visualization(rows: list[dict], columns: list[str], title: str, preference: str) -> dict | None:
 	if len(columns) < 3 or len(columns) > 6:
 		return None
-	if preference != "bar" and not _should_auto_use_grouped_chart(title):
+	if preference not in {"bar", "line"} and not _should_auto_use_grouped_chart(title):
 		return None
 
 	time_comparison_grouped_chart = _build_time_comparison_grouped_chart(rows, columns, title)
@@ -453,11 +458,11 @@ def _build_grouped_chart_visualization(rows: list[dict], columns: list[str], tit
 	if long_form_grouped_chart:
 		return long_form_grouped_chart
 
-	label_key = next((column for column in columns if not _is_numeric_column(rows, column)), None)
+	label_key = next((column for column in columns if not _is_measure_column(rows, column)), None)
 	if not label_key:
 		return None
 
-	numeric_keys = [column for column in columns if column != label_key and _is_numeric_column(rows, column)]
+	numeric_keys = [column for column in columns if column != label_key and _is_measure_column(rows, column)]
 	label_columns = [column for column in columns if column not in numeric_keys]
 	if len(numeric_keys) < 2 or len(label_columns) != 1:
 		return None
@@ -504,7 +509,7 @@ def _build_long_form_grouped_chart(rows: list[dict], columns: list[str], title: 
 	if len(columns) != 3:
 		return None
 
-	numeric_keys = [column for column in columns if _is_numeric_column(rows, column)]
+	numeric_keys = [column for column in columns if _is_measure_column(rows, column)]
 	if len(numeric_keys) != 1:
 		return None
 
@@ -534,6 +539,13 @@ def _build_long_form_grouped_chart(rows: list[dict], columns: list[str], title: 
 
 		series_values = values_by_series_and_category.setdefault(series_label, {})
 		series_values[category_label] = series_values.get(category_label, 0.0) + float(value)
+
+	categories, values_by_series_and_category = _bucket_top_n_categories(
+		categories, values_by_series_and_category, series_names,
+	)
+	series_names, values_by_series_and_category = _bucket_top_n_series(
+		series_names, values_by_series_and_category, categories,
+	)
 
 	series = [
 		{
@@ -565,7 +577,7 @@ def _build_time_comparison_grouped_chart(rows: list[dict], columns: list[str], t
 	if len(columns) != 4:
 		return None
 
-	numeric_keys = [column for column in columns if _is_numeric_column(rows, column)]
+	numeric_keys = [column for column in columns if _is_measure_column(rows, column)]
 	if len(numeric_keys) != 1:
 		return None
 
@@ -653,7 +665,35 @@ def _pick_chart_axes(rows: list[dict], columns: list[str]) -> tuple[str | None, 
 		return second, first
 	if second_numeric and not first_numeric:
 		return first, second
+	if first_numeric and second_numeric:
+		# Both columns are numeric — use heuristics to pick label vs value.
+		# SQL dimension functions (MONTH, YEAR, DAY, QUARTER, WEEK) produce
+		# integers but are meant as category labels, not measure values.
+		first_is_dimension = _is_dimension_column_name(first)
+		second_is_dimension = _is_dimension_column_name(second)
+		if first_is_dimension and not second_is_dimension:
+			return first, second
+		if second_is_dimension and not first_is_dimension:
+			return second, first
+		# If neither or both look like dimensions, pick the one with fewer
+		# distinct values as the label axis.
+		first_distinct = len({row.get(first) for row in rows})
+		second_distinct = len({row.get(second) for row in rows})
+		if first_distinct <= second_distinct:
+			return first, second
+		return second, first
 	return None, None
+
+
+def _is_dimension_column_name(column: str) -> bool:
+	"""Return True if the column name looks like a SQL dimension function."""
+	name = (column or "").upper().strip()
+	return bool(re.match(r"^(MONTH|YEAR|DAY|QUARTER|WEEK|DAYOFWEEK|HOUR)\s*\(", name))
+
+
+def _is_measure_column(rows: list[dict], column: str) -> bool:
+	"""Return True if the column holds numeric measure values (not a dimension function)."""
+	return _is_numeric_column(rows, column) and not _is_dimension_column_name(column)
 
 
 def _is_numeric_column(rows: list[dict], column: str) -> bool:
@@ -668,6 +708,72 @@ def _detect_bar_layout(title: str) -> str:
 	return "vertical"
 
 
+_TOP_N_SERIES = 6
+_OTHERS_LABEL = "Others"
+
+
+def _bucket_top_n_series(
+	series_names: list[str],
+	values_by_series: dict[str, dict[str, float]],
+	categories: list[str],
+	top_n: int = _TOP_N_SERIES,
+) -> tuple[list[str], dict[str, dict[str, float]]]:
+	"""Keep the top-N series by total value and merge the rest into 'Others'."""
+	if len(series_names) <= top_n:
+		return series_names, values_by_series
+
+	totals = {
+		name: sum(values_by_series.get(name, {}).get(cat, 0.0) for cat in categories)
+		for name in series_names
+	}
+	ranked = sorted(series_names, key=lambda n: totals[n], reverse=True)
+	top_names = ranked[:top_n]
+	rest_names = ranked[top_n:]
+
+	if not rest_names:
+		return top_names, values_by_series
+
+	others_values: dict[str, float] = {}
+	for name in rest_names:
+		for cat in categories:
+			others_values[cat] = others_values.get(cat, 0.0) + values_by_series.get(name, {}).get(cat, 0.0)
+
+	new_values = {name: values_by_series[name] for name in top_names}
+	new_values[_OTHERS_LABEL] = others_values
+	return top_names + [_OTHERS_LABEL], new_values
+
+
+def _bucket_top_n_categories(
+	categories: list[str],
+	values_by_series: dict[str, dict[str, float]],
+	series_names: list[str],
+	top_n: int = 12,
+) -> tuple[list[str], dict[str, dict[str, float]]]:
+	"""Keep the top-N categories by total value and merge the rest into 'Others'."""
+	if len(categories) <= top_n:
+		return categories, values_by_series
+
+	totals = {
+		cat: sum(values_by_series.get(name, {}).get(cat, 0.0) for name in series_names)
+		for cat in categories
+	}
+	ranked = sorted(categories, key=lambda c: totals[c], reverse=True)
+	top_cats = ranked[:top_n]
+	rest_cats = ranked[top_n:]
+
+	if not rest_cats:
+		return top_cats, values_by_series
+
+	new_values: dict[str, dict[str, float]] = {}
+	for name in series_names:
+		series_data = values_by_series.get(name, {})
+		new_series: dict[str, float] = {cat: series_data.get(cat, 0.0) for cat in top_cats}
+		new_series[_OTHERS_LABEL] = sum(series_data.get(cat, 0.0) for cat in rest_cats)
+		new_values[name] = new_series
+
+	return top_cats + [_OTHERS_LABEL], new_values
+
+
 def _pick_long_form_grouping_keys(rows: list[dict], dimension_keys: list[str], title: str) -> tuple[str, str]:
 	title_text = (title or "").lower()
 	if any(keyword in title_text for keyword in ("per day", "by day", "daily", "per date", "by date")):
@@ -675,6 +781,13 @@ def _pick_long_form_grouping_keys(rows: list[dict], dimension_keys: list[str], t
 		if date_key:
 			other_key = next(column for column in dimension_keys if column != date_key)
 			return date_key, other_key
+
+	# For YEAR+MONTH dimension pairs, use MONTH as label (x-axis) and YEAR as
+	# series (legend) so year-over-year comparison reads naturally.
+	year_key = next((k for k in dimension_keys if k.upper().startswith("YEAR(")), None)
+	if year_key:
+		other_key = next(k for k in dimension_keys if k != year_key)
+		return other_key, year_key
 
 	return dimension_keys[0], dimension_keys[1]
 
@@ -704,6 +817,16 @@ def _should_auto_use_grouped_chart(title: str) -> bool:
 			"graph",
 		)
 	)
+
+
+def _should_use_line_chart(preference: str, label_key: str, rows: list[dict]) -> bool:
+	if preference == "line":
+		return True
+	if preference != "auto":
+		return False
+	if len(rows) <= 4:
+		return False
+	return _is_dimension_column_name(label_key) or _is_date_like_column(rows, label_key)
 
 
 def _should_use_pie_chart(preference: str, title: str, values: Sequence[float]) -> bool:

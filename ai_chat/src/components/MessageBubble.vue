@@ -473,7 +473,7 @@ const closeIconSvg = `
 `.trim();
 
 const isChartResponse = computed(() =>
-  ["bar_chart", "pie_chart"].includes(props.message.responseType)
+  ["bar_chart", "pie_chart", "line_chart"].includes(props.message.responseType)
 );
 
 const bubbleStyle = computed(() => {
@@ -486,9 +486,12 @@ const bubbleStyle = computed(() => {
 
 const inlineChartHeight = computed(() => (isInlineChartExpanded.value ? 420 : 260));
 
-const chartType = computed(() =>
-  props.message.visualization?.kind === "pie" ? "pie" : "bar"
-);
+const chartType = computed(() => {
+  const kind = props.message.visualization?.kind;
+  if (kind === "pie") return "pie";
+  if (kind === "line") return "line";
+  return "bar";
+});
 
 const hasDebugPanel = computed(() => {
   const debug = props.message.debug;
@@ -601,6 +604,36 @@ function buildChartOptions(expanded = false) {
         y: {
           formatter: (value) => formatChartValue(value),
         },
+      },
+    };
+  }
+
+  if (visualization?.kind === "line") {
+    return {
+      chart: {
+        toolbar: {
+          show: true,
+          tools: { download: downloadIconSvg, selection: false, zoom: false, zoomin: false, zoomout: false, pan: false, reset: false },
+        },
+      },
+      stroke: { curve: "smooth", width: 3 },
+      markers: { size: 4, hover: { sizeOffset: 2 } },
+      dataLabels: { enabled: false },
+      xaxis: {
+        categories,
+        labels: {
+          rotate: expanded ? -12 : -20,
+          style: { fontSize: expanded ? "12px" : "11px" },
+        },
+      },
+      yaxis: {
+        title: { text: valueLabel },
+        labels: { formatter: (value) => formatChartValue(value) },
+      },
+      legend: { show: false },
+      colors: ["#0f766e"],
+      tooltip: {
+        y: { formatter: (value) => formatChartValue(value) },
       },
     };
   }

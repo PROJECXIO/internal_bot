@@ -19,7 +19,7 @@ import frappe
 from internal_bot.bot.state import GraphState
 from internal_bot.bot import progress, trace
 
-_VALID_PREFERENCES = {"card", "bar", "pie", "text", "auto"}
+_VALID_PREFERENCES = {"card", "bar", "pie", "line", "text", "auto"}
 
 _SYSTEM_PROMPT = """\
 You are a data presentation assistant for an ERP chatbot.
@@ -29,6 +29,7 @@ Given a user question and SQL result shape, output ONLY valid JSON — no markdo
 visualization choices:
 - "card"  — 1 row, 1 numeric value (a single KPI/metric)
 - "bar"   — default for comparing values across categories (rankings, totals by group, item/SKU/customer/date sales)
+- "line"  — time-series or trend data; prefer when x-axis is temporal (dates, months, years, quarters) and there are more than 4 data points
 - "pie"   — only for clear part-of-whole/share/composition questions with 2–8 categories and all positive values
 - "text"  — factual lookup, large table, or when no chart fits
 - "auto"  — genuinely uncertain; let the system decide
@@ -37,6 +38,7 @@ prefix: one short friendly sentence shown above the result.
 For "text" answers use something like "Here's what I found:" or "I found your answer:".
 For charts/cards use something like "Here is the sales comparison:" or "Here are the numbers:".
 Prefer clear, professional phrasing. Avoid casual filler like "you asked for".
+If the x-axis is a time dimension (months, dates, years) and there are more than 4 data points, prefer "line" over "bar".
 If the user wants another chart but does not explicitly ask for pie, prefer "bar".\
 """
 
@@ -164,7 +166,7 @@ def _should_explain_previous_result(state: GraphState) -> bool:
 
     last_response = state.get("last_assistant_response") or {}
     last_response_type = last_response.get("response_type")
-    if last_response_type not in {"bar_chart", "pie_chart", "metric_card", "table"}:
+    if last_response_type not in {"bar_chart", "pie_chart", "line_chart", "metric_card", "table"}:
         return False
 
     return True

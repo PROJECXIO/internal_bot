@@ -17,6 +17,10 @@ import time
 import frappe
 
 from internal_bot.bot.state import GraphState
+from internal_bot.bot.services.language import (
+	language_name_for_prompt,
+	localize_text,
+)
 from internal_bot.bot import progress, trace
 
 _VALID_PREFERENCES = {"card", "bar", "pie", "donut", "line", "area", "stacked_bar", "text", "auto"}
@@ -46,6 +50,7 @@ When the question is about shares, proportions, breakdowns, or distribution acro
 When the question is about temporal volume or magnitude, "area" is a good choice.
 When each category contains multiple component parts and the user should see both the total and the composition, prefer "stacked_bar".
 When the question is about ranking, top/bottom, or time-based comparisons, prefer "bar" or "line".\
+Return the prefix in the requested response language.\
 """
 
 
@@ -55,16 +60,25 @@ def run(state: GraphState) -> dict:
     log_t0 = trace.node_start(state, node_name)
     if state.get("_emit_progress"):
         progress.emit(state, node_name, "Choosing visualization")
+    response_language = state.get("response_language") or state.get("user_profile_language") or "en"
+    llm_client = state.get("_llm_client")
 
     if _should_explain_previous_result(state):
+        answer_prefix, input_tokens, output_tokens = localize_text(
+            "Here's a deeper analysis:",
+            response_language,
+            llm_client=llm_client,
+            trace_context=trace.llm_trace_context(state, node_name, "follow_up_analysis_prefix"),
+        )
         trace.detail(state, "Viz choice", "text (follow-up analysis)")
-        trace.detail(state, "Answer prefix", "Here's a deeper analysis:")
+        trace.detail(state, "Answer prefix", answer_prefix)
         return _update(state, node_name, t0, {
             "visualization_preference": "text",
-            "answer_prefix": "Here's a deeper analysis:",
+            "answer_prefix": answer_prefix,
+            "input_tokens": (state.get("input_tokens") or 0) + input_tokens,
+            "output_tokens": (state.get("output_tokens") or 0) + output_tokens,
         }, log_t0)
 
-    llm_client = state.get("_llm_client")
     if not llm_client:
         return _update(state, node_name, t0, {
             "visualization_preference": "auto",
@@ -77,6 +91,7 @@ def run(state: GraphState) -> dict:
 
     user_content = (
         f"Question: {question}\n"
+        f"Response language: {language_name_for_prompt(response_language)}\n"
         f"Columns: {columns}\n"
         f"Row count: {len(rows)}\n"
         f"Sample (first 3 rows): {_safe_sample(rows, 3)}"
@@ -101,8 +116,16 @@ def run(state: GraphState) -> dict:
             getattr(llm_client, "last_output_tokens", 0) or 0
         )
         result = _parse_response(raw)
+        localized_prefix, extra_in_tokens, extra_out_tokens = localize_text(
+            result.get("prefix") or "",
+            response_language,
+            llm_client=llm_client,
+            trace_context=trace.llm_trace_context(state, node_name, "localize_answer_prefix"),
+        )
+        input_tokens += extra_in_tokens
+        output_tokens += extra_out_tokens
         trace.detail(state, "Viz choice", result.get("visualization"))
-        trace.detail(state, "Answer prefix", result.get("prefix"))
+        trace.detail(state, "Answer prefix", localized_prefix)
     except Exception as exc:
         frappe.log_error(str(exc), "VisualizationPlanner LLM error")
         return _update(state, node_name, t0, {
@@ -124,7 +147,7 @@ def run(state: GraphState) -> dict:
 
     return _update(state, node_name, t0, {
         "visualization_preference": visualization,
-        "answer_prefix": result.get("prefix") or "",
+        "answer_prefix": localized_prefix or result.get("prefix") or "",
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "llm_provider": getattr(llm_client, "provider", ""),

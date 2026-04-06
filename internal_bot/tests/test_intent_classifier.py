@@ -1,5 +1,5 @@
 from unittest import TestCase
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from internal_bot.bot.nodes import intent_classifier
 
@@ -141,3 +141,94 @@ class TestIntentClassifier(TestCase):
             "show sales invoices last financial year to date",
         )
         self.assertTrue(result["follow_up_to_previous_result"])
+
+    def test_detected_message_language_is_saved_in_state(self):
+        llm = MagicMock()
+        llm.chat_completion.return_value = (
+            '{"intent": "query", "normalized_question": "مبيعات العملاء", "detected_language": "ar", "reason": "", "clarification_options": []}'
+        )
+        llm.last_input_tokens = 1
+        llm.last_output_tokens = 1
+
+        state = {
+            "raw_message": "مبيعات العملاء",
+            "chat_history": [],
+            "user_profile_language": "en",
+            "node_trace": [],
+            "timing": {},
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "_llm_client": llm,
+        }
+
+        result = intent_classifier.run(state)
+
+        self.assertEqual(result["response_language"], "ar")
+        self.assertEqual(result["response_language_source"], "message")
+
+    def test_unclear_message_falls_back_to_user_profile_language(self):
+        llm = MagicMock()
+        llm.chat_completion.return_value = (
+            '{"intent": "query", "normalized_question": "2024", "detected_language": "", "reason": "", "clarification_options": []}'
+        )
+        llm.last_input_tokens = 1
+        llm.last_output_tokens = 1
+
+        state = {
+            "raw_message": "2024",
+            "chat_history": [],
+            "user_profile_language": "ar",
+            "node_trace": [],
+            "timing": {},
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "_llm_client": llm,
+        }
+
+        result = intent_classifier.run(state)
+
+        self.assertEqual(result["response_language"], "ar")
+        self.assertEqual(result["response_language_source"], "profile")
+
+    def test_no_llm_uses_stable_language_fallback(self):
+        state = {
+            "raw_message": "2024",
+            "chat_history": [],
+            "user_profile_language": "en",
+            "node_trace": [],
+            "timing": {},
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "_llm_client": None,
+        }
+
+        result = intent_classifier.run(state)
+
+        self.assertEqual(result["response_language"], "en")
+        self.assertEqual(result["response_language_source"], "profile")
+
+    @patch("internal_bot.bot.nodes.intent_classifier.frappe.db.get_value")
+    def test_greeting_includes_user_name(self, mock_get_value):
+        llm = MagicMock()
+        llm.chat_completion.return_value = (
+            '{"intent": "greeting", "normalized_question": "hi", "detected_language": "en", "reason": "Hello! How can I help you today?", "clarification_options": []}'
+        )
+        llm.last_input_tokens = 1
+        llm.last_output_tokens = 1
+        mock_get_value.return_value = "John Doe"
+
+        state = {
+            "user": "john@example.com",
+            "raw_message": "hi",
+            "chat_history": [],
+            "node_trace": [],
+            "timing": {},
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "_llm_client": llm,
+        }
+
+        result = intent_classifier.run(state)
+
+        self.assertEqual(result["intent"], "greeting")
+        self.assertEqual(result["intent_reason"], "Hello John! How can I help you today?")

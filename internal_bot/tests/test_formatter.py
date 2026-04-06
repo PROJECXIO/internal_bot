@@ -1,4 +1,5 @@
-from frappe.tests.utils import FrappeTestCase
+from unittest.mock import MagicMock
+from unittest import TestCase
 
 from internal_bot.bot.services.formatter import (
 	format_structured_response,
@@ -7,7 +8,7 @@ from internal_bot.bot.services.formatter import (
 )
 
 
-class TestStructuredFormatter(FrappeTestCase):
+class TestStructuredFormatter(TestCase):
 	def _base_state(self, rows, message="show sales by territory"):
 		return {
 			"intent": "query",
@@ -27,6 +28,53 @@ class TestStructuredFormatter(FrappeTestCase):
 		self.assertEqual(response["visualization"]["kind"], "metric")
 		self.assertEqual(response["summary"], "Total Sales: 125,000")
 		self.assertEqual(response["markdown"], "")
+
+	def test_blocked_default_copy_is_localized_for_arabic(self):
+		llm = MagicMock()
+		llm.chat_completion.return_value = "هذا الطلب يتعلّق ببيانات مقيّدة."
+		llm.last_input_tokens = 4
+		llm.last_output_tokens = 3
+
+		response = format_structured_response(
+			{
+				"intent": "blocked",
+				"response_language": "ar",
+				"_llm_client": llm,
+			}
+		)
+
+		self.assertEqual(response["reason"], "هذا الطلب يتعلّق ببيانات مقيّدة.")
+		self.assertEqual(response["markdown"], "هذا الطلب يتعلّق ببيانات مقيّدة.")
+
+	def test_unsupported_language_uses_localization_helper(self):
+		llm = MagicMock()
+		llm.chat_completion.return_value = "Cette demande concerne des donnees restreintes."
+		llm.last_input_tokens = 4
+		llm.last_output_tokens = 3
+
+		response = format_structured_response(
+			{
+				"intent": "blocked",
+				"response_language": "fr",
+				"_llm_client": llm,
+			}
+		)
+
+		self.assertEqual(response["reason"], "Cette demande concerne des donnees restreintes.")
+
+	def test_unsupported_language_falls_back_to_english_when_localization_fails(self):
+		llm = MagicMock()
+		llm.chat_completion.side_effect = RuntimeError("translation failed")
+
+		response = format_structured_response(
+			{
+				"intent": "blocked",
+				"response_language": "fr",
+				"_llm_client": llm,
+			}
+		)
+
+		self.assertEqual(response["reason"], "This request touches restricted data.")
 
 	def test_single_numeric_value_returns_metric_card_when_requested(self):
 		response = format_structured_response(

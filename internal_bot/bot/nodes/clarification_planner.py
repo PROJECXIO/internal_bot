@@ -16,6 +16,11 @@ import time
 import frappe
 
 from internal_bot.bot.state import GraphState
+from internal_bot.bot.services.language import (
+	language_name_for_prompt,
+	localize_period_options,
+	localize_text,
+)
 from internal_bot.bot import progress, trace
 
 _SYSTEM_PROMPT = """\
@@ -61,6 +66,9 @@ period that the user clearly intends to specify (phrases like "for a period", \
 - Ask only ONE question per turn
 - Read conversation history — never re-ask an already-answered question
 - "options" must always be present (use [] if truly no options apply)
+- Write the question in the requested response language.
+- If you are asking about a time period, localize those period options to the requested response language.
+- If you are asking about DocTypes, keep the DocType names unchanged.
 """
 
 
@@ -78,6 +86,7 @@ def run(state: GraphState) -> dict:
     question = state.get("normalized_question") or state.get("raw_message", "")
     schema_context = state.get("schema_context") or ""
     discovered = state.get("discovered_doctypes") or []
+    response_language = state.get("response_language") or state.get("user_profile_language") or "en"
 
     # Short-circuit: if the user selected a DocType from the options AND the
     # question has no pending period placeholder, go straight to query_planner.
@@ -104,6 +113,9 @@ def run(state: GraphState) -> dict:
         user_parts.append(f"## Available Schema\n{schema_context}")
     if discovered:
         user_parts.append(f"## Matching DocTypes\n{', '.join(discovered)}")
+    user_parts.append(
+        f"## Response Language\n{language_name_for_prompt(response_language)}"
+    )
 
     messages = [
         {"role": "system", "content": _SYSTEM_PROMPT},
@@ -124,6 +136,21 @@ def run(state: GraphState) -> dict:
             getattr(llm_client, "last_output_tokens", 0) or 0
         )
         result = _parse_response(raw)
+        localized_question = result.get("question", "")
+        translated_question, extra_in_tokens, extra_out_tokens = localize_text(
+            localized_question,
+            response_language,
+            llm_client=llm_client,
+            trace_context=trace.llm_trace_context(state, node_name, "localize_clarification_question"),
+        ) if localized_question and response_language not in {"", "en"} else (localized_question, 0, 0)
+        localized_options, options_in_tokens, options_out_tokens = localize_period_options(
+            result.get("options") or [],
+            response_language,
+            llm_client=llm_client,
+            trace_context=trace.llm_trace_context(state, node_name, "localize_clarification_options"),
+        )
+        input_tokens += extra_in_tokens + options_in_tokens
+        output_tokens += extra_out_tokens + options_out_tokens
     except Exception as exc:
         frappe.log_error(str(exc), "ClarificationPlanner LLM error")
         return _update(
@@ -161,8 +188,13 @@ def run(state: GraphState) -> dict:
 
     return _update(state, node_name, t0, {
         "ready_to_query": False,
-        "clarification_question": result.get("question", "Could you provide more details about what you're looking for?"),
-        "clarification_options": result.get("options") or [],
+        "clarification_question": translated_question or localize_text(
+            "Could you provide more details about what you're looking for?",
+            response_language,
+            llm_client=llm_client,
+            trace_context=trace.llm_trace_context(state, node_name, "default_clarification_question"),
+        )[0],
+        "clarification_options": localized_options,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "llm_provider": getattr(llm_client, "provider", ""),

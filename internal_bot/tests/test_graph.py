@@ -89,9 +89,12 @@ _ANALYTICS_INTENT = '{"mode": "analytics", "primary_doctype": "Sales Invoice", "
 _VIZ_TEXT = "{\"visualization\": \"text\", \"prefix\": \"Here's what I found:\"}"
 _VIZ_BAR = "{\"visualization\": \"bar\", \"prefix\": \"Here's the breakdown:\"}"
 _ANSWER_MARKDOWN = "This is the markdown answer."
+_ANSWER_MARKDOWN_AR = "هذا هو الرد النهائي."
 
 
 class TestGraphIntegration(FrappeTestCase):
+	TEST_SITE = "ai"
+
 	def setUp(self):
 		# Ensure the test session exists
 		if not frappe.db.exists("AI Chat Session", _TEST_SESSION):
@@ -169,6 +172,33 @@ class TestGraphIntegration(FrappeTestCase):
 		self.assertIn("name", response["columns"])
 		self.assertEqual(response["response_type"], "plain_text")
 		self.assertEqual(response["markdown"], _ANSWER_MARKDOWN)
+
+	def test_arabic_query_keeps_arabic_across_successful_response(self):
+		self._ensure_alias("Customer", "العملاء", "ar")
+		intent_response = (
+			'{"intent": "query", "normalized_question": "اعرض كل العملاء", '
+			'"detected_language": "ar", "reason": "", "clarification_options": []}'
+		)
+		viz_response = '{"visualization": "text", "prefix": "إليك ما وجدته:"}'
+
+		llm = _make_mock_llm([intent_response, _LIST_INTENT, viz_response, _ANSWER_MARKDOWN_AR])
+		state = _base_state("اعرض كل العملاء", llm_client=llm)
+
+		graph = get_graph()
+
+		with patch("internal_bot.bot.nodes.query_planner.query_executor") as mock_qe, \
+		     patch("internal_bot.bot.nodes.query_planner.permission_service") as mock_perm:
+			mock_perm.check_doctype_read_access.return_value = True
+			mock_qe.execute_query_intent.return_value = (
+				[{"name": "CUST-001", "customer_name": "Acme Corp"}], None
+			)
+			result = graph.invoke(state)
+
+		response = result["formatted_response"]
+		self.assertEqual(result["response_language"], "ar")
+		self.assertEqual(response["status"], "success")
+		self.assertEqual(response["answer_prefix"], "إليك ما وجدته:")
+		self.assertEqual(response["markdown"], _ANSWER_MARKDOWN_AR)
 
 	# ── Node trace ────────────────────────────────────────────────────
 

@@ -8,6 +8,8 @@ import math
 import re
 from typing import TYPE_CHECKING, Any
 
+from internal_bot.bot.services.language import localize_text
+
 if TYPE_CHECKING:
 	from internal_bot.bot.state import GraphState
 
@@ -25,35 +27,39 @@ def format_structured_response(state: "GraphState") -> dict:
 	intent = state.get("intent", "query")
 	debug = state.get("debug", False)
 	preference = state.get("visualization_preference") or "auto"
+	response_language = state.get("response_language") or state.get("user_profile_language") or "en"
 
 	if intent == "greeting":
+		greeting_default = _localized_copy(state, "greeting_default", response_language)
 		response = {
 			"status": "greeting",
-			"message": state.get("intent_reason", "Hello! How can I help you today?"),
+			"message": state.get("intent_reason", greeting_default),
 			"markdown": state.get("answer_markdown")
 			or state.get("intent_reason")
-			or "Hello! How can I help you today?",
+			or greeting_default,
 			"meta": {"confidence": 1.0, "confidence_label": "high"},
 		}
 
 	elif intent == "clarification_needed":
+		clarify_default = _localized_copy(state, "clarify_question_default", response_language)
 		response = {
 			"status": "clarification_needed",
-			"question": state.get("intent_reason", "Could you clarify your question?"),
+			"question": state.get("intent_reason", clarify_default),
 			"options": state.get("clarification_options", []),
 			"markdown": state.get("answer_markdown")
 			or state.get("intent_reason")
-			or "Could you clarify your question?",
+			or clarify_default,
 			"meta": {"confidence": 0.4, "confidence_label": "low"},
 		}
 
 	elif intent == "blocked":
+		blocked_default = _localized_copy(state, "blocked_default", response_language)
 		response = {
 			"status": "blocked",
-			"reason": state.get("intent_reason", "This request touches restricted data."),
+			"reason": state.get("intent_reason", blocked_default),
 			"markdown": state.get("answer_markdown")
 			or state.get("intent_reason")
-			or "This request touches restricted data.",
+			or blocked_default,
 			"meta": {"confidence": 1.0, "confidence_label": "high"},
 		}
 
@@ -64,7 +70,7 @@ def format_structured_response(state: "GraphState") -> dict:
 			state.get("query_execution_error")
 			or state.get("query_invalid_reason", "Unknown error")
 		)
-		reason = "Could not generate a valid query. Please rephrase your question."
+		reason = _localized_copy(state, "query_error_default", response_language)
 		response = {
 			"status": "error",
 			"reason": reason,
@@ -129,6 +135,7 @@ def build_success_payload(state: "GraphState") -> dict:
 		}
 
 	response_type, visualization, summary = _build_success_visualization(
+		state=state,
 		rows=rows,
 		columns=columns,
 		title=title,
@@ -344,13 +351,18 @@ def _serialize_rows(rows: list[dict]) -> list[dict]:
 
 
 def _build_success_visualization(
+	state: "GraphState",
 	rows: list[dict],
 	columns: list[str],
 	title: str,
 	preference: str,
 ) -> tuple[str, dict | None, str]:
 	if not rows:
-		return "empty", None, "I couldn't find any matching data for that request."
+		return "empty", None, _localized_copy(
+			state,
+			"empty_results",
+			state.get("response_language") or state.get("user_profile_language") or "en",
+		)
 
 	if preference == "text":
 		plain_summary = _build_plain_summary(rows, columns)
@@ -375,6 +387,22 @@ def _build_success_visualization(
 		return "plain_text", None, plain_summary
 
 	return "table", None, _summarize_table(rows, columns)
+
+
+def _localized_copy(state: "GraphState", key: str, language_code: str, **kwargs) -> str:
+	copy_by_key = {
+		"greeting_default": "Hello! How can I help you today?",
+		"clarify_question_default": "Could you clarify your question?",
+		"blocked_default": "This request touches restricted data.",
+		"query_error_default": "Could not generate a valid query. Please rephrase your question.",
+		"empty_results": "I couldn't find any matching data for that request.",
+	}
+	return localize_text(
+		copy_by_key[key],
+		language_code,
+		llm_client=state.get("_llm_client"),
+		**kwargs,
+	)[0]
 
 
 def _build_plain_answer(rows: list[dict], columns: list[str]) -> str | None:

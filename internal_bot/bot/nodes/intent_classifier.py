@@ -16,6 +16,11 @@ import time
 import frappe
 
 from internal_bot.bot.state import GraphState
+from internal_bot.bot.services.language import (
+	language_name_for_prompt,
+	localize_text,
+	resolve_response_language,
+)
 from internal_bot.bot import progress, trace
 
 
@@ -50,7 +55,8 @@ Respond in valid JSON only (no Markdown, no extra text):
 {
   "intent": "greeting|query|clarification_needed|blocked",
   "normalized_question": "<cleaned lowercase version of the full question, incorporating context from history if this is a clarification answer>",
-  "reason": "<friendly reply if greeting, brief reason if blocked or clarification_needed, else empty string>",
+  "detected_language": "<ISO language code such as en, ar, fr; use empty string if unclear>",
+  "reason": "<friendly reply if greeting, brief reason if blocked or clarification_needed, else empty string; write it in detected_language when that language is clear>",
   "clarification_options": []
 }"""
 
@@ -107,6 +113,10 @@ def run(state: GraphState) -> dict:
 	trace.detail(state, "Question", raw)
 
 	clarification_answer = _build_clarification_answer_query(state, raw)
+	response_language, response_language_source = resolve_response_language(
+		raw,
+		user_profile_language=state.get("user_profile_language"),
+	)
 	if clarification_answer:
 		trace.detail(state, "Clarification answer detected", clarification_answer)
 		return _update(state, node_name, t0, {
@@ -114,6 +124,8 @@ def run(state: GraphState) -> dict:
 			"intent_reason": "",
 			"normalized_question": clarification_answer,
 			"clarification_options": [],
+			"response_language": response_language,
+			"response_language_source": response_language_source,
 			# Keep clarification answers in the same query thread so schema
 			# discovery can boost the prior DocType context if available.
 			"follow_up_to_previous_result": True,
@@ -127,6 +139,8 @@ def run(state: GraphState) -> dict:
 			"intent_reason": "",
 			"normalized_question": follow_up_normalized,
 			"clarification_options": [],
+			"response_language": response_language,
+			"response_language_source": response_language_source,
 			"follow_up_to_previous_result": True,
 		}, log_t0)
 
@@ -135,11 +149,19 @@ def run(state: GraphState) -> dict:
 	for kw in _SENSITIVE_KEYWORDS:
 		if kw in raw_lower:
 			trace.detail(state, "Blocked keyword matched", kw)
+			blocked_reason, _, _ = localize_text(
+				"This request touches restricted HR/payroll data.",
+				response_language,
+				llm_client=llm_client,
+				trace_context=trace.llm_trace_context(state, node_name, "localize_blocked_reason"),
+			)
 			return _update(state, node_name, t0, {
 				"intent": "blocked",
-				"intent_reason": "This request touches restricted HR/payroll data.",
+				"intent_reason": blocked_reason,
 				"normalized_question": _normalize(raw),
 				"clarification_options": [],
+				"response_language": response_language,
+				"response_language_source": response_language_source,
 			}, log_t0)
 
 	# Let the LLM decide greeting vs query so mixed messages like
@@ -161,6 +183,18 @@ def run(state: GraphState) -> dict:
 						),
 					}
 				)
+			messages.append(
+				{
+					"role": "system",
+					"content": (
+						"Language handling:\n"
+						f"- Prefer replying in the user's language when clear.\n"
+						f"- Current fallback language: {language_name_for_prompt(state.get('user_profile_language') or 'en')}.\n"
+						"- Set detected_language to an ISO language code like en, ar, or fr.\n"
+						"- If the message language is unclear, set detected_language to an empty string."
+					),
+				}
+			)
 			messages.extend({"role": m["role"], "content": m["content"]} for m in history)
 			if state.get("last_assistant_context_text"):
 				messages.append(
@@ -186,9 +220,16 @@ def run(state: GraphState) -> dict:
 			parsed = json.loads(_strip_fences(response_text))
 			intent = parsed.get("intent", "query")
 			normalized = parsed.get("normalized_question") or _normalize(raw)
+			detected_language = parsed.get("detected_language") or ""
+			response_language, response_language_source = resolve_response_language(
+				raw,
+				detected_language=detected_language,
+				user_profile_language=state.get("user_profile_language"),
+			)
 			reason = parsed.get("reason", "")
 			options = parsed.get("clarification_options", [])
 			trace.detail(state, "LLM intent", intent)
+			trace.detail(state, "Response language", response_language)
 		except Exception as exc:
 			# LLM parse failure → fall back to treating as a query
 			frappe.log_error(message=str(exc), title="IntentParser LLM error")
@@ -196,6 +237,10 @@ def run(state: GraphState) -> dict:
 			normalized = _normalize(raw)
 			reason = ""
 			options = []
+			response_language, response_language_source = resolve_response_language(
+				raw,
+				user_profile_language=state.get("user_profile_language"),
+			)
 			input_tokens = (state.get("input_tokens") or 0) + (
 				getattr(llm_client, "last_input_tokens", 0) or 0
 			)
@@ -209,16 +254,27 @@ def run(state: GraphState) -> dict:
 		normalized = _normalize(raw)
 		reason = ""
 		options = []
+		response_language, response_language_source = resolve_response_language(
+			raw,
+			user_profile_language=state.get("user_profile_language"),
+		)
 		input_tokens = state.get("input_tokens") or 0
 		output_tokens = state.get("output_tokens") or 0
 		trace.detail(state, "No LLM client, defaulting intent", intent)
 
 	return _update(state, node_name, t0, {
 		"intent": intent,
-		"intent_reason": reason,
+		"intent_reason": _personalize_greeting(
+			reason,
+			state.get("user"),
+			response_language,
+			llm_client=llm_client,
+		) if intent == "greeting" else reason,
 		"normalized_question": normalized,
 		"clarification_options": options,
 		"follow_up_to_previous_result": False,
+		"response_language": response_language,
+		"response_language_source": response_language_source,
 		"input_tokens": input_tokens,
 		"output_tokens": output_tokens,
 		"llm_provider": getattr(llm_client, "provider", ""),
@@ -361,6 +417,53 @@ def _strip_fences(text: str) -> str:
 	import re
 	m = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
 	return m.group(1).strip() if m else text.strip()
+
+
+def _personalize_greeting(
+	reason: str,
+	user: str | None,
+	response_language: str,
+	llm_client=None,
+) -> str:
+	message = (
+		reason
+		or localize_text(
+			"Hello! How can I help you today?",
+			response_language,
+			llm_client=llm_client,
+		)[0]
+	).strip()
+	if not user or user == "Guest":
+		return message
+
+	name = _get_user_display_name(user)
+	if not name:
+		return message
+
+	if name.casefold() in message.casefold():
+		return message
+
+	if not reason:
+		return localize_text(
+			f"Hello {name}! How can I help you today?",
+			response_language,
+			llm_client=llm_client,
+		)[0]
+
+	if "hello" in message.casefold():
+		return re.sub(r"hello\b", f"Hello {name}", message, count=1, flags=re.IGNORECASE)
+
+	return f"{message} {name}".strip()
+
+
+def _get_user_display_name(user: str) -> str:
+	try:
+		full_name = (frappe.db.get_value("User", user, "full_name") or "").strip()
+		if full_name:
+			return full_name.split()[0]
+	except Exception:
+		return ""
+	return ""
 
 
 def _update(state: GraphState, node_name: str, t0: float, updates: dict, log_t0: float) -> dict:

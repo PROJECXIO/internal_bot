@@ -17,12 +17,15 @@ class GraphState(TypedDict, total=False):
     current_date: str       # YYYY-MM-DD for this request
     current_day_name: str   # Monday, Tuesday, ...
     current_year: int       # numeric year for this request
+    user_profile_language: str  # normalized user language code from Frappe profile
 
     # ── Node 1: Intent Parser ────────────────────────────────────────
     normalized_question: str
     intent: str             # "greeting" | "query" | "clarification_needed" | "blocked"
     intent_reason: str      # free-text reason (shown for blocked/clarification)
     clarification_options: list  # options list for clarification_needed
+    response_language: str       # final language for this turn, e.g. "en", "ar", "fr"
+    response_language_source: str  # "message" | "profile" | "default"
 
     # ── Node 2: Memory Loader ────────────────────────────────────────
     chat_history: list      # [{"role": "user"|"assistant", "content": "..."}]

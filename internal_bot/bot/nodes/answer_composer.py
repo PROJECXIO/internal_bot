@@ -15,6 +15,10 @@ from statistics import median
 import frappe
 
 from internal_bot.bot.services.formatter import format_structured_response
+from internal_bot.bot.services.language import (
+	language_name_for_prompt,
+	localize_text,
+)
 from internal_bot.bot.state import GraphState
 from internal_bot.bot import progress, trace
 
@@ -52,6 +56,7 @@ Rules:
 - In `analysis_mode`, prefer 2-4 insight bullets grounded in the data.
 - If the data is too limited for a strong conclusion, say that briefly instead of inventing a pattern.
 - If `row_count` is 1 and the question asks to compare or list multiple items/categories, explicitly note that **only** one result was found for the period (e.g. "**SKU004** is the **only** item with sales this month"). Bold the word **only** to draw attention.
+- Always write the answer in the requested response language.
 
 Examples:
 - Good comparison brief:
@@ -79,6 +84,7 @@ def run(state: GraphState) -> dict:
 	try:
 		rows = state.get("query_result_rows") or []
 		analysis_mode = _is_analysis_request(state)
+		response_language = state.get("response_language") or state.get("user_profile_language") or "en"
 		preview_response = format_structured_response({**state, "answer_markdown": state.get("answer_markdown") or ""})
 		if not rows:
 			return _update(
@@ -103,6 +109,7 @@ def run(state: GraphState) -> dict:
 		user_content = json.dumps(
 			{
 				"question": state.get("normalized_question") or state.get("raw_message", ""),
+				"response_language": language_name_for_prompt(response_language),
 				"analysis_mode": analysis_mode,
 				"response_type": response_type,
 				"visualization_kind": preview_visualization.get("kind"),
@@ -468,7 +475,11 @@ def _build_empty_result_markdown(state: GraphState, preview_response: dict) -> s
 	if summary:
 		return summary
 
-	return "I couldn't find any matching data for that request."
+	return localize_text(
+		"I couldn't find any matching data for that request.",
+		state.get("response_language") or state.get("user_profile_language") or "en",
+		llm_client=state.get("_llm_client"),
+	)[0]
 
 
 def _finalize_success_state(state: GraphState, updates: dict) -> dict:

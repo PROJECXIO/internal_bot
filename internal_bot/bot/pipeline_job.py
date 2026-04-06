@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from internal_bot.bot import progress
 from internal_bot.bot import trace
 from internal_bot.bot.graph import get_graph
+from internal_bot.bot.services.language import get_user_profile_language
 from internal_bot.bot.services.llm_client import get_llm_client
 
 # Load env vars (LangSmith etc.) — same as chat.py
@@ -89,6 +90,7 @@ def run_pipeline_job(
         "current_date": str(current_dt.date()),
         "current_day_name": current_dt.strftime("%A"),
         "current_year": current_dt.year,
+        "user_profile_language": get_user_profile_language(user),
         "start_time": time.monotonic(),
         "node_trace": [],
         "timing": {},

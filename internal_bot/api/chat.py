@@ -23,6 +23,7 @@ from frappe import _
 
 from internal_bot.bot.graph import get_graph
 from internal_bot.bot.services.formatter import normalize_cached_response
+from internal_bot.bot.services.language import get_user_profile_language
 from internal_bot.bot.services.llm_client import get_llm_client
 from internal_bot.bot import trace
 
@@ -82,6 +83,7 @@ def ask(message: str, session_id: str = None, debug: bool = False):
 		"current_date": str(current_dt.date()),
 		"current_day_name": current_dt.strftime("%A"),
 		"current_year": current_dt.year,
+		"user_profile_language": get_user_profile_language(user),
 		"start_time": time.monotonic(),
 		"node_trace": [],
 		"timing": {},

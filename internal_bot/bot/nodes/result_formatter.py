@@ -7,6 +7,7 @@ Handles all four status codes: success, clarification_needed, blocked, error.
 import time
 
 from internal_bot.bot.services.formatter import format_structured_response
+from internal_bot.bot.services.language import localize_text
 from internal_bot.bot.state import GraphState
 from internal_bot.bot import progress, trace
 
@@ -17,6 +18,7 @@ def run(state: GraphState) -> dict:
 	log_t0 = trace.node_start(state, node_name)
 	if state.get("_emit_progress"):
 		progress.emit(state, node_name, "Preparing response")
+	response_language = state.get("response_language") or state.get("user_profile_language") or "en"
 
 	# Clarification planner has a question to ask
 	if state.get("clarification_question") and not state.get("ready_to_query"):
@@ -31,11 +33,15 @@ def run(state: GraphState) -> dict:
 	elif not state.get("discovered_doctypes") and state.get("intent") == "query":
 		candidates = state.get("schema_candidates") or []
 		options = [candidate[0] for candidate in candidates[:5]]
-		question_text = (
-			"I found some possible matches. Did you mean one of these?"
-			if options
-			else "I couldn't find matching data. Could you specify what type of document you're looking for?"
-		)
+		question_text = localize_text(
+			"I found some possible matches. Did you mean one of these?",
+			response_language,
+			llm_client=state.get("_llm_client"),
+		)[0] if options else localize_text(
+			"I couldn't find matching data. Could you specify what type of document you're looking for?",
+			response_language,
+			llm_client=state.get("_llm_client"),
+		)[0]
 		formatted = {
 			"status": "clarification_needed",
 			"question": question_text,

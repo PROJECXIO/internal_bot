@@ -1,12 +1,11 @@
+from unittest import TestCase
 from unittest.mock import MagicMock
 import json
-
-from frappe.tests.utils import FrappeTestCase
 
 from internal_bot.bot.nodes import answer_composer
 
 
-class TestAnswerComposer(FrappeTestCase):
+class TestAnswerComposer(TestCase):
 	def test_answer_composer_sets_markdown_and_token_counts(self):
 		llm = MagicMock()
 		llm.provider = "MockLLM"
@@ -147,3 +146,34 @@ class TestAnswerComposer(FrappeTestCase):
 			"I couldn't find any items that have dropped after five months",
 		)
 		llm.chat_completion.assert_not_called()
+
+	def test_answer_composer_instructs_llm_to_answer_in_resolved_language(self):
+		llm = MagicMock()
+		llm.provider = "MockLLM"
+		llm.model = "mock-model"
+		llm.last_input_tokens = 8
+		llm.last_output_tokens = 6
+		llm.chat_completion.return_value = "## الملخص\n\n- **المنطقة الغربية** تتصدر المبيعات."
+
+		state = {
+			"raw_message": "اعرض المبيعات حسب المنطقة",
+			"normalized_question": "اعرض المبيعات حسب المنطقة",
+			"query_result_rows": [
+				{"territory": "West", "total_sales": 1200},
+				{"territory": "East", "total_sales": 950},
+			],
+			"response_language": "ar",
+			"visualization_preference": "bar",
+			"answer_prefix": "إليك التفاصيل:",
+			"input_tokens": 0,
+			"output_tokens": 0,
+			"_llm_client": llm,
+			"node_trace": [],
+			"timing": {},
+		}
+
+		result = answer_composer.run(state)
+
+		self.assertIn("المنطقة الغربية", result["answer_markdown"])
+		payload = json.loads(llm.chat_completion.call_args.args[0][1]["content"])
+		self.assertEqual(payload["response_language"], "Arabic")

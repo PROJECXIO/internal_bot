@@ -92,7 +92,8 @@ def run(state: GraphState) -> dict:
         [f"{candidate.doctype_name}:{candidate.final_score}" for candidate in candidates[:5]],
     )
 
-    # Enrich each discovered DocType with permission-filtered fields and links
+    # Enrich each discovered DocType with permission-filtered fields, links,
+    # and child table schemas so the LLM can generate child-table joins.
     enriched = []
     for name in discovered_names[:5]:
         try:
@@ -102,10 +103,16 @@ def run(state: GraphState) -> dict:
         except Exception:
             fields, links = [], []
 
+        try:
+            child_tables = schema_svc.get_child_tables(name, user=user)
+        except Exception:
+            child_tables = []
+
         enriched.append({
             "name": name,
             "fields": fields,
             "links": links,
+            "child_tables": child_tables,
         })
 
     schema_ctx = schema_svc.build_schema_context(enriched)

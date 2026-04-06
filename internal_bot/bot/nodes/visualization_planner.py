@@ -190,7 +190,21 @@ def _safe_sample(rows: list[dict], n: int) -> list[dict]:
 
 
 def _should_explain_previous_result(state: GraphState) -> bool:
+    """Only force 'deeper analysis' mode for explicit analysis requests.
+
+    Simple follow-up questions (who's the lowest, what did they buy) should
+    go through normal visualization planning so they get a proper title and
+    chart type from the LLM.
+    """
     if not state.get("follow_up_to_previous_result"):
+        return False
+
+    question = (state.get("normalized_question") or state.get("raw_message") or "").lower()
+    if not any(re.search(p, question) for p in (
+        r"\banaly[sz]e\b", r"\banalysis\b", r"\bexplain\b", r"\binterpret\b",
+        r"\bbreak down\b", r"\bdeeper\b", r"\bfurther\b", r"\binsight(s)?\b",
+        r"\bwhat does this mean\b",
+    )):
         return False
 
     last_response = state.get("last_assistant_response") or {}

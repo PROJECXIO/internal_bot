@@ -55,8 +55,21 @@ def load_chat_memory(session_name: str, window_size: int) -> dict:
 			if candidate and not _looks_like_follow_up(candidate):
 				last_non_follow_up_user_question = candidate
 
+	enriched_messages = []
+	for m in messages:
+		content = m.content or ""
+		if m.role == "assistant" and m.structured_response:
+			try:
+				resp = frappe.parse_json(m.structured_response) or {}
+			except Exception:
+				resp = {}
+			data_summary = _build_response_context_text(resp)
+			if data_summary:
+				content = f"{content}\n\n[Data context]\n{data_summary}" if content else data_summary
+		enriched_messages.append({"role": m.role, "content": content})
+
 	return {
-		"messages": [{"role": m.role, "content": m.content} for m in messages],
+		"messages": enriched_messages,
 		"summary": session.memory_summary or "",
 		"total_messages": session.total_messages or 0,
 		"last_user_question": last_user_question,

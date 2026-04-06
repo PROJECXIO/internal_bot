@@ -15,7 +15,9 @@ _ALIAS_CACHE_TTL = 30 * 60
 _DEFAULT_ALIASES_BY_DOCTYPE: dict[str, list[str]] = {
     "Sales Invoice": [
         "مبيعات",
+        "فاتورة",
         "فاتورة مبيعات",
+        "فواتير",
         "فواتير مبيعات",
         "ايراد",
         "ايرادات",

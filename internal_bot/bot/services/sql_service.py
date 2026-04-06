@@ -120,9 +120,15 @@ For monthly grouping across open-ended or multi-year data, prefer YEAR_MONTH(fie
 so months from different years stay separate.
 17. NEVER include SQL table names, backticks, or SQL expressions like \
 `tabSales Invoice`.grand_total in fields, dimensions, filters, or date_range.field. \
-Use plain field names only, like "grand_total", "item_code", or "DATE(posting_date)".
+For the primary DocType, use plain field names: "grand_total", "customer", "posting_date". \
+NEVER prefix primary DocType fields with the DocType name (wrong: "Sales Invoice.grand_total"). \
+NEVER reference DocTypes that are not the primary or in the joins list (wrong: "Customer.customer_name").
 18. For ERPNext child tables (like Sales Invoice Item), if you need line-item data, \
-add a join with {"child_doctype": "...", "parent_link_field": "parent", "join_type": "LEFT"}.
+add a join with {"child_doctype": "...", "parent_link_field": "parent", "join_type": "LEFT"}. \
+NEVER use a child table as the primary_doctype/doctype — always use the parent DocType \
+(e.g. "Sales Invoice") and JOIN the child table. ONLY child-table fields need a DocType \
+prefix (e.g. "Sales Invoice Item.item_code", "Sales Invoice Item.qty"). \
+Primary DocType fields must always be plain names without prefix.
 19. Child-table link fields "parent", "parenttype", and "parentfield" are valid even \
 if they are not shown in the schema table.
 """

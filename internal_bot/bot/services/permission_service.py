@@ -100,11 +100,31 @@ def assert_fields_permitted(doctype: str, fieldnames: list[str], user: str) -> l
     Return only the fieldnames the user is permitted to read.
     Silently drops disallowed fields.
     Raises frappe.PermissionError if no permitted fields remain after filtering.
+
+    Child-table prefixed fields (e.g. "Sales Invoice Item.item_code") are validated
+    against the child DocType's permitted fields.
     """
     permitted = set(get_permitted_field_names(doctype, user))
     permitted.add("name")  # primary key is always accessible
 
-    filtered = [fn for fn in fieldnames if fn in permitted]
+    # Cache child-table permitted fields to avoid repeated lookups
+    _child_permitted_cache: dict[str, set[str]] = {}
+
+    filtered = []
+    for fn in fieldnames:
+        if "." in fn:
+            # Child-table prefixed field: "Child DocType.fieldname"
+            child_dt, child_field = fn.split(".", 1)
+            if child_dt not in _child_permitted_cache:
+                try:
+                    _child_permitted_cache[child_dt] = set(get_permitted_field_names(child_dt, user))
+                    _child_permitted_cache[child_dt].add("name")
+                except Exception:
+                    _child_permitted_cache[child_dt] = set()
+            if child_field in _child_permitted_cache[child_dt]:
+                filtered.append(fn)
+        elif fn in permitted:
+            filtered.append(fn)
 
     if not filtered:
         frappe.throw(

@@ -175,7 +175,7 @@ def _should_apply_context_priority(
     compact_tokens = [token for token in query_tokens if token]
     if not compact_tokens:
         return follow_up_to_previous_result
-    max_tokens = 3 if follow_up_to_previous_result else 2
+    max_tokens = 10 if follow_up_to_previous_result else 5
     if len(compact_tokens) > max_tokens:
         return False
     return not any(_IDENTIFIER_TOKEN_RE.search(token) for token in compact_tokens)

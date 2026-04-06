@@ -45,6 +45,24 @@ one like "Sales Invoice", "All dates", "This month", or "2024" — is an ANSWER 
 and MUST be classified as "query". Never classify a direct answer to a clarification
 question as "clarification_needed".
 
+## Follow-up detection rule:
+If the user's message references previous results or conversation context using pronouns
+or implicit references (e.g. "when did they buy it", "what's the invoice code",
+"show me more details", "اشتراه امتة", "وايه كود الفاتورة"), set is_follow_up to true
+and EXPAND normalized_question to include:
+1. The referenced entity values from conversation data (customer name, item code, amounts)
+2. The ERP document type needed to answer (Sales Invoice, Sales Order, Item, etc.)
+For example:
+- Previous result showed customers with totals; user asks "what did the lowest buy"
+  → extract the lowest customer from the data, normalized_question:
+  "sales invoice items for palmer productions ltd"
+- Previous result was about "Grant Plastics Ltd." buying "SKU008"; user asks "when and invoice code"
+  → normalized_question: "sales invoice date and name for grant plastics ltd sku008"
+Important: when the follow-up asks about DIFFERENT data than what's in the previous result
+(e.g. previous result is customers, follow-up asks what items they bought), include the
+target document type (Sales Invoice, Sales Order, etc.) in normalized_question so the system
+queries the right data.
+
 ## Other rules:
 - Greetings, pleasantries, small-talk, or thanks → "greeting"
 - Any question about salary, payslips, payroll, employee private data → "blocked"
@@ -54,7 +72,8 @@ question as "clarification_needed".
 Respond in valid JSON only (no Markdown, no extra text):
 {
   "intent": "greeting|query|clarification_needed|blocked",
-  "normalized_question": "<cleaned lowercase version of the full question, incorporating context from history if this is a clarification answer>",
+  "normalized_question": "<cleaned lowercase version of the full question; for follow-ups, expand pronouns and references using conversation history to include explicit entity names and DocTypes>",
+  "is_follow_up": false,
   "detected_language": "<ISO language code such as en, ar, fr; use empty string if unclear>",
   "reason": "<friendly reply if greeting, brief reason if blocked or clarification_needed, else empty string; write it in detected_language when that language is clear>",
   "clarification_options": []
@@ -228,7 +247,9 @@ def run(state: GraphState) -> dict:
 			)
 			reason = parsed.get("reason", "")
 			options = parsed.get("clarification_options", [])
+			is_follow_up = bool(parsed.get("is_follow_up", False))
 			trace.detail(state, "LLM intent", intent)
+			trace.detail(state, "LLM is_follow_up", is_follow_up)
 			trace.detail(state, "Response language", response_language)
 		except Exception as exc:
 			# LLM parse failure → fall back to treating as a query
@@ -237,6 +258,7 @@ def run(state: GraphState) -> dict:
 			normalized = _normalize(raw)
 			reason = ""
 			options = []
+			is_follow_up = False
 			response_language, response_language_source = resolve_response_language(
 				raw,
 				user_profile_language=state.get("user_profile_language"),
@@ -254,6 +276,7 @@ def run(state: GraphState) -> dict:
 		normalized = _normalize(raw)
 		reason = ""
 		options = []
+		is_follow_up = False
 		response_language, response_language_source = resolve_response_language(
 			raw,
 			user_profile_language=state.get("user_profile_language"),
@@ -272,7 +295,7 @@ def run(state: GraphState) -> dict:
 		) if intent == "greeting" else reason,
 		"normalized_question": normalized,
 		"clarification_options": options,
-		"follow_up_to_previous_result": False,
+		"follow_up_to_previous_result": is_follow_up,
 		"response_language": response_language,
 		"response_language_source": response_language_source,
 		"input_tokens": input_tokens,

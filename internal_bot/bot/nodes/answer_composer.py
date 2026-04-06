@@ -43,9 +43,15 @@ Rules:
 - Keep the answer clean and readable, not decorative.
 - Do not mention SQL, internal processing, or implementation details.
 - Do not repeat `answer_prefix` in the markdown.
+- if user ask for dirct answer to a specific question about the data (e.g. "which is the highest", "who is the lowest", "what was it"), give a direct one-line answer naming that item and its value. Do NOT list all items or re-narrate the full dataset.
 - If the response is a category comparison chart, prefer analyst-style observations such as the leader, close runner-up, laggard, spread, or concentration.
-- If this is a follow-up analysis request about a previous result, do not repeat chart instructions or mention visualization.
-- In follow-up analysis, explain the pattern, contrast, or takeaway behind the numbers in plain markdown prose or bullets.
+- If this is a follow-up to a previous result AND the question asks for a specific item
+  (e.g. "who is the lowest", "which is the highest", "what was it"), give a direct one-line
+  answer naming that item and its value. Do NOT list all items or re-narrate the full dataset.
+  Example: if asked "who's the lowest?" after a 3-customer chart, answer "**Palmer Productions Ltd.** at **15,000**." — nothing more.
+- If this is a follow-up analysis request (e.g. "analyze", "explain", "break down"),
+  explain the pattern or takeaway behind the numbers in plain markdown prose or bullets.
+  Do not repeat chart instructions or mention visualization.
 - If `analysis_mode` is true, analyze the data instead of just restating it.
 - In `analysis_mode`, focus on business takeaways such as:
   - concentration or outliers

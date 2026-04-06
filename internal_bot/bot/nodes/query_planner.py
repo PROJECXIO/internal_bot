@@ -27,15 +27,31 @@ from internal_bot.bot import progress, trace
 
 _MAX_RETRIES = 3
 
+_ANALYSIS_KEYWORDS_RE = (
+    r"\banaly[sz]e\b", r"\banalysis\b", r"\bexplain\b", r"\binterpret\b",
+    r"\bbreak down\b", r"\bdeeper\b", r"\binsight(s)?\b",
+    r"\bwhat does this mean\b",
+)
+
+
 def _is_pure_analysis_follow_up(state: GraphState) -> bool:
-    """Return True when the user is asking for analysis of a previous result,
-    not a brand-new query.  Fully trusts the LLM-powered intent classifier's
-    follow_up_to_previous_result flag — no keyword overrides."""
+    """Return True only when the user asks to analyze/explain the existing result.
+
+    Questions that ask for new or different data (items, details, child records)
+    must always run a fresh query, even if follow_up_to_previous_result is True.
+    """
     if not state.get("follow_up_to_previous_result"):
         return False
 
     last_response = state.get("last_assistant_response") or {}
-    return bool(last_response.get("rows"))
+    if not last_response.get("rows"):
+        return False
+
+    # Only reuse cached rows for explicit analysis requests.
+    # All other follow-ups (what items, tell me more, show details) need fresh queries.
+    import re
+    question = (state.get("normalized_question") or state.get("raw_message") or "").lower()
+    return any(re.search(p, question) for p in _ANALYSIS_KEYWORDS_RE)
 
 
 def run(state: GraphState) -> dict:
@@ -157,6 +173,26 @@ def run(state: GraphState) -> dict:
     # hallucinate a DocType name not in the list.
     primary_doctype = intent.get("doctype") or intent.get("primary_doctype")
     trace.detail(state, "Primary doctype", primary_doctype)
+
+    # Guard: child tables must never be the primary doctype.
+    if primary_doctype and frappe.get_meta(primary_doctype).istable:
+        return _update(state, node_name, t0, {
+            "generated_intent": intent,
+            "query_is_valid": False,
+            "query_invalid_reason": (
+                f"'{primary_doctype}' is a child table and cannot be queried directly. "
+                "Use the parent DocType (e.g. 'Sales Invoice') as primary_doctype and "
+                "add a join: {\"child_doctype\": \"" + primary_doctype + "\", "
+                "\"parent_link_field\": \"parent\", \"join_type\": \"LEFT\"}."
+            ),
+            "query_generation_attempts": attempt + 1,
+            "retries": attempt + 1,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "llm_provider": getattr(llm_client, "provider", ""),
+            "llm_model": getattr(llm_client, "model", ""),
+        }, log_t0)
+
     if not primary_doctype or not permission_service.check_doctype_read_access(
         primary_doctype, user
     ):

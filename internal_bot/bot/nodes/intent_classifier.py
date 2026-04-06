@@ -261,8 +261,13 @@ def _build_clarification_answer_query(state: GraphState, raw: str) -> str:
 	if not base_question:
 		return cleaned
 
-	# Very short clarification answers need the prior question context to stay useful.
-	if not has_explicit_correction and len(cleaned.split()) <= 4 and cleaned not in base_question:
+	# Option selections and other short clarification answers need the prior
+	# question context to stay queryable.
+	if (
+		not has_explicit_correction
+		and (matches_option or len(cleaned.split()) <= 4)
+		and cleaned not in base_question
+	):
 		return f"{base_question} {cleaned}".strip()
 
 	return cleaned

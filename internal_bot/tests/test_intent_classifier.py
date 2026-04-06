@@ -108,3 +108,36 @@ class TestIntentClassifier(TestCase):
             "حدد الاصناف الساقطة بعد شهر خمسه انخفاضا كبير",
         )
         self.assertTrue(result["follow_up_to_previous_result"])
+
+    def test_long_option_reply_keeps_previous_question_context(self):
+        state = {
+            "raw_message": "Last financial year to date",
+            "chat_history": [
+                {"role": "user", "content": "show sales invoices"},
+                {
+                    "role": "assistant",
+                    "content": "Which period do you mean?",
+                },
+            ],
+            "last_user_question": "show sales invoices",
+            "last_non_follow_up_user_question": "show sales invoices",
+            "last_assistant_response": {
+                "status": "clarification_needed",
+                "question": "Which period do you mean?",
+                "options": ["This month", "Last month", "Last financial year to date"],
+            },
+            "node_trace": [],
+            "timing": {},
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "_llm_client": None,
+        }
+
+        result = intent_classifier.run(state)
+
+        self.assertEqual(result["intent"], "query")
+        self.assertEqual(
+            result["normalized_question"],
+            "show sales invoices last financial year to date",
+        )
+        self.assertTrue(result["follow_up_to_previous_result"])

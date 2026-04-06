@@ -190,6 +190,9 @@ def classify_confidence(candidates: list[ScoredCandidate]) -> tuple[str, list[Sc
         return "no_match", candidates[:5]
 
     top = above_minimum[0]
+    if top.match_reason == "exact alias match":
+        return "clear_winner", [top]
+
     second_score = above_minimum[1].final_score if len(above_minimum) > 1 else 0.0
     score_gap = top.final_score - second_score
 

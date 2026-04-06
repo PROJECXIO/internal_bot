@@ -1,7 +1,7 @@
 from unittest import TestCase
 from unittest.mock import patch
 
-from internal_bot.bot.services.hybrid_scorer import rank_candidates
+from internal_bot.bot.services.hybrid_scorer import ScoredCandidate, classify_confidence, rank_candidates
 from internal_bot.bot.services.schema_corpus import CorpusDocument
 
 
@@ -88,3 +88,15 @@ class TestHybridScorer(TestCase):
         self.assertTrue(candidates)
         self.assertEqual(candidates[0].doctype_name, "Sales Invoice")
         self.assertNotIn("Item", [candidate.doctype_name for candidate in candidates])
+
+    def test_exact_alias_match_is_a_clear_winner(self):
+        candidates = [
+            ScoredCandidate("Sales Invoice", 1.0, 0.0, 0.46, "exact alias match"),
+            ScoredCandidate("Sales Order", 0.2, 0.0, 0.34, "token overlap"),
+            ScoredCandidate("Quotation", 0.2, 0.0, 0.31, "token overlap"),
+        ]
+
+        decision, selected = classify_confidence(candidates)
+
+        self.assertEqual(decision, "clear_winner")
+        self.assertEqual([candidate.doctype_name for candidate in selected], ["Sales Invoice"])

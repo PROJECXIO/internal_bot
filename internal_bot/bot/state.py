@@ -43,6 +43,8 @@ class GraphState(TypedDict, total=False):
     schema_confidence: float
     schema_decision: str
     schema_candidates: list
+    query_embedding: Optional[list]    # embedding vector for the user's question (reused downstream)
+    enriched_schemas_by_doctype: dict  # {doctype_name: {name, fields, links, child_tables}}
 
     # ── Node: Clarification Planner ──────────────────────────────────
     ready_to_query: bool         # True = proceed to query_planner

@@ -10,7 +10,7 @@ import time
 import frappe
 
 from internal_bot.bot.services import schema as schema_svc
-from internal_bot.bot.services import hybrid_scorer, schema_corpus
+from internal_bot.bot.services import hybrid_scorer, schema_corpus, schema_field_filter
 from internal_bot.bot.services.text_normalizer import normalize_text, remove_stop_words, tokenize
 from internal_bot.bot.state import GraphState
 from internal_bot.bot import progress, trace
@@ -115,7 +115,31 @@ def run(state: GraphState) -> dict:
             "child_tables": child_tables,
         })
 
-    schema_ctx = schema_svc.build_schema_context(enriched)
+    enriched_by_name = {e["name"]: e for e in enriched}
+
+    # For a clear winner, apply field-level filtering immediately so the query
+    # LLM receives a compact, relevant schema instead of all fields/child tables.
+    # (Ambiguous path is filtered later by intent_resolver after it picks the winner.)
+    if decision == "clear_winner" and len(enriched) == 1 and query_embedding and llm_client:
+        winner_entry = enriched[0]
+        try:
+            filtered_fields, filtered_children = schema_field_filter.filter_schema_for_query(
+                question=question,
+                query_embedding=query_embedding,
+                fields=winner_entry.get("fields") or [],
+                child_tables=winner_entry.get("child_tables") or [],
+                llm_client=llm_client,
+                doctype_name=winner_entry["name"],
+            )
+            filtered_entry = {**winner_entry, "fields": filtered_fields, "child_tables": filtered_children}
+            schema_ctx = schema_svc.build_schema_context([filtered_entry])
+            trace.detail(state, "Schema context filtered (clear winner)", True)
+        except Exception as exc:
+            frappe.log_error(str(exc), "SchemaDiscovery: field filtering failed")
+            schema_ctx = schema_svc.build_schema_context(enriched)
+    else:
+        schema_ctx = schema_svc.build_schema_context(enriched)
+
     schema_confidence = round(selected_candidates[0].final_score, 4) if selected_candidates else 0.0
     schema_candidates = [
         (candidate.doctype_name, round(candidate.final_score, 4))
@@ -128,6 +152,8 @@ def run(state: GraphState) -> dict:
         "schema_confidence": schema_confidence,
         "schema_decision": decision,
         "schema_candidates": schema_candidates,
+        "query_embedding": query_embedding,
+        "enriched_schemas_by_doctype": enriched_by_name,
     }, log_t0)
 
 

@@ -9,12 +9,15 @@ Graph topology:
       ├─ [greeting / blocked / clarification_needed] → result_formatter
       └─ [query] → schema_discovery   ← permission gates 1 & 2 applied here
                        ↓ (conditional)
-                       ├─ [no_schema]           → result_formatter
-                       ├─ [needs_clarification] → clarification_planner
+                       ├─ [no_schema]          → result_formatter
+                       ├─ [needs_resolution]   → intent_resolver  ← thinking node
                        │                              ↓ (conditional)
-                       │                              ├─ [ready] → query_planner
-                       │                              └─ [ask]   → result_formatter
-                       └─ [schema_found]         → query_planner
+                       │                              ├─ [resolved]          → query_planner
+                       │                              └─ [needs_clarification]→ clarification_planner
+                       │                                                            ↓ (conditional)
+                       │                                                            ├─ [ready] → query_planner
+                       │                                                            └─ [ask]   → result_formatter
+                       └─ [schema_found]        → query_planner
                                                        ↓ (conditional, self-loop on retry)
                                                        ├─ [success]  → visualization_planner
                                                        │                  ↓
@@ -37,6 +40,7 @@ from internal_bot.bot.nodes import (
     analytics_node,
     clarification_planner,
     intent_classifier,
+    intent_resolver,
     memory_loader,
     query_planner,
     result_formatter,
@@ -72,8 +76,8 @@ def _route_after_schema(state: GraphState) -> str:
         trace.route(state, "result_formatter")
         return "no_schema"
     if decision in ("ambiguous", "low_confidence"):
-        trace.route(state, "clarification_planner")
-        return "needs_clarification"
+        trace.route(state, "intent_resolver")
+        return "needs_resolution"
     # Single DocType resolved, but check if the question has a vague period
     # placeholder that needs clarification before querying.
     question = (state.get("normalized_question") or "").lower()
@@ -82,6 +86,20 @@ def _route_after_schema(state: GraphState) -> str:
         return "needs_clarification"
     trace.route(state, "query_planner")
     return "schema_found"
+
+
+def _route_after_intent_resolver(state: GraphState) -> str:
+    decision = state.get("schema_decision", "")
+    if decision == "clear_winner":
+        # Check for period placeholder before skipping clarification
+        question = (state.get("normalized_question") or "").lower()
+        if any(p in question for p in _PERIOD_PLACEHOLDERS):
+            trace.route(state, "clarification_planner")
+            return "needs_clarification"
+        trace.route(state, "query_planner")
+        return "resolved"
+    trace.route(state, "clarification_planner")
+    return "needs_clarification"
 
 
 def _route_after_clarification(state: GraphState) -> str:
@@ -116,6 +134,7 @@ def _build_graph():
     g.add_node("intent_classifier", intent_classifier.run)
     g.add_node("memory_loader", memory_loader.run)
     g.add_node("schema_discovery", schema_discovery.run)
+    g.add_node("intent_resolver", intent_resolver.run)
     g.add_node("clarification_planner", clarification_planner.run)
     g.add_node("query_planner", query_planner.run)
     g.add_node("visualization_planner", visualization_planner.run)
@@ -139,14 +158,25 @@ def _build_graph():
         },
     )
 
-    # schema_discovery → no match, ambiguous (multi), or clear (single)
+    # schema_discovery → no match, needs thinking, or clear (single)
     g.add_conditional_edges(
         "schema_discovery",
         _route_after_schema,
         {
             "no_schema": "result_formatter",
+            "needs_resolution": "intent_resolver",
             "needs_clarification": "clarification_planner",
             "schema_found": "query_planner",
+        },
+    )
+
+    # intent_resolver → resolved (skip clarification) or still ambiguous
+    g.add_conditional_edges(
+        "intent_resolver",
+        _route_after_intent_resolver,
+        {
+            "resolved": "query_planner",
+            "needs_clarification": "clarification_planner",
         },
     )
 

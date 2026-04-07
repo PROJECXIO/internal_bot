@@ -29,7 +29,7 @@ _SYSTEM_PROMPT = """\
 You are a data presentation assistant for an ERP chatbot.
 Given a user question and SQL result shape, output ONLY valid JSON — no markdown:
 {"visualization": "bar", "prefix": "Here's the breakdown:"}
-
+alwayse petoizer using one of charts insted of table 
 visualization choices:
 - "card"  — 1 row, 1 numeric value (a single KPI/metric)
 - "bar"   — default for comparing values across categories (rankings, totals by group, item/SKU/customer/date sales)
@@ -190,38 +190,14 @@ def _safe_sample(rows: list[dict], n: int) -> list[dict]:
 
 
 def _should_explain_previous_result(state: GraphState) -> bool:
-    """Only force 'deeper analysis' mode for explicit analysis requests.
+    """Always returns False — every follow-up gets fresh visualization planning.
 
-    Simple follow-up questions (who's the lowest, what did they buy) should
-    go through normal visualization planning so they get a proper title and
-    chart type from the LLM.
+    The 'deeper analysis' shortcut forced text mode and a hardcoded title for
+    all analysis requests, even when the user was asking about a different entity.
+    Now that query_planner always runs fresh queries, visualization should also
+    be determined fresh by the LLM.
     """
-    if not state.get("follow_up_to_previous_result"):
-        return False
-
-    question = (state.get("normalized_question") or state.get("raw_message") or "").lower()
-    if not any(re.search(p, question) for p in (
-        r"\banaly[sz]e\b", r"\banalysis\b", r"\bexplain\b", r"\binterpret\b",
-        r"\bbreak down\b", r"\bdeeper\b", r"\bfurther\b", r"\binsight(s)?\b",
-        r"\bwhat does this mean\b",
-    )):
-        return False
-
-    last_response = state.get("last_assistant_response") or {}
-    last_response_type = last_response.get("response_type")
-    if last_response_type not in {
-        "bar_chart",
-        "pie_chart",
-        "donut_chart",
-        "line_chart",
-        "area_chart",
-        "stacked_bar_chart",
-        "metric_card",
-        "table",
-    }:
-        return False
-
-    return True
+    return False
 
 
 def _update(state: GraphState, node_name: str, t0: float, updates: dict, log_t0: float) -> dict:

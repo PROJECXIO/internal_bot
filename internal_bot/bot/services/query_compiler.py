@@ -211,8 +211,10 @@ def compile_analytics_intent(
     if where_parts:
         sql += "\nWHERE " + "\n  AND ".join(where_parts)
 
-    # GROUP BY
-    if group_by_parts:
+    # GROUP BY — only when aggregating (i.e. there are metrics).
+    # If there are only dimensions and no metrics, we want a flat JOIN result
+    # (e.g. list all Sales Invoice Items), so skip GROUP BY to avoid deduplication.
+    if group_by_parts and metric_aliases:
         sql += "\nGROUP BY " + ", ".join(group_by_parts)
 
     # ORDER BY (validated — only permitted fields or metric aliases)

@@ -51,8 +51,11 @@ Examples: "show me open sales orders", "list customers added this week"
 }
 
 ### Mode "analytics"
-Use when the question requires aggregation: totals, counts, averages, or GROUP BY.
-Examples: "total sales by customer this month", "how many invoices submitted today"
+Use when the question requires aggregation (totals, counts, averages, GROUP BY) OR
+when the question needs data from child tables (e.g. Sales Invoice Item, Purchase
+Order Item). frappe.get_list() (list mode) cannot access child table fields.
+Examples: "total sales by customer this month", "how many invoices submitted today",
+"show me the items in this invoice", "what did the customer buy"
 
 {
   "mode": "analytics",
@@ -129,8 +132,22 @@ NEVER use a child table as the primary_doctype/doctype — always use the parent
 (e.g. "Sales Invoice") and JOIN the child table. ONLY child-table fields need a DocType \
 prefix (e.g. "Sales Invoice Item.item_code", "Sales Invoice Item.qty"). \
 Primary DocType fields must always be plain names without prefix.
-19. Child-table link fields "parent", "parenttype", and "parentfield" are valid even \
+19. CRITICAL: Child table fields and JOINs are ONLY valid in "analytics" mode. \
+NEVER use "list" mode when you need to access child table fields (item_code, qty, amount, \
+item_name, or any field from a child DocType). If the query requires any child table field, \
+you MUST use "analytics" mode. \
+For a FLAT ITEM LISTING (e.g. "show me the items in this invoice", "what did they buy"): \
+use analytics mode with dimensions = [child table fields] and metrics = [] (empty). \
+This returns each row as-is without grouping. \
+For AGGREGATION (e.g. "total sales per item"): use analytics mode with both dimensions and metrics. \
+frappe.get_list() cannot handle child table field prefixes — using "list" mode with \
+child table fields will cause a runtime error.
+20. Child-table link fields "parent", "parenttype", and "parentfield" are valid even \
 if they are not shown in the schema table.
+21. In "list" mode, ALL filter field names must be plain parent DocType field names \
+(e.g. "customer", "posting_date"). NEVER use dotted notation like "items.item_code" \
+or "Sales Invoice Item.item_code" as a filter field in list mode — this will silently \
+return wrong results. If you need to filter by a child table field, use "analytics" mode.
 """
 
 
@@ -229,8 +246,9 @@ def _parse_intent(raw: str) -> dict:
     if mode == "analytics" and not data.get("primary_doctype"):
         raise ValueError(f"Analytics intent missing 'primary_doctype'. Raw: {raw!r}")
 
-    if mode == "analytics" and not data.get("metrics"):
-        raise ValueError(f"Analytics intent missing 'metrics'. Raw: {raw!r}")
+    # metrics may be empty [] for flat child-table listing (no aggregation)
+    if mode == "analytics" and data.get("metrics") is None:
+        raise ValueError(f"Analytics intent missing 'metrics' key. Raw: {raw!r}")
 
     return _normalize_time_dimensions(data)
 

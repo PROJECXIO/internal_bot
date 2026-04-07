@@ -27,31 +27,14 @@ from internal_bot.bot import progress, trace
 
 _MAX_RETRIES = 3
 
-_ANALYSIS_KEYWORDS_RE = (
-    r"\banaly[sz]e\b", r"\banalysis\b", r"\bexplain\b", r"\binterpret\b",
-    r"\bbreak down\b", r"\bdeeper\b", r"\binsight(s)?\b",
-    r"\bwhat does this mean\b",
-)
-
-
 def _is_pure_analysis_follow_up(state: GraphState) -> bool:
-    """Return True only when the user asks to analyze/explain the existing result.
+    """Always returns False — every follow-up runs a fresh query.
 
-    Questions that ask for new or different data (items, details, child records)
-    must always run a fresh query, even if follow_up_to_previous_result is True.
+    The cached-rows shortcut was too aggressive: it reused stale data even
+    when the user asked about a different entity, different fields, or
+    child-table details.  Fresh queries are cheap; wrong answers are not.
     """
-    if not state.get("follow_up_to_previous_result"):
-        return False
-
-    last_response = state.get("last_assistant_response") or {}
-    if not last_response.get("rows"):
-        return False
-
-    # Only reuse cached rows for explicit analysis requests.
-    # All other follow-ups (what items, tell me more, show details) need fresh queries.
-    import re
-    question = (state.get("normalized_question") or state.get("raw_message") or "").lower()
-    return any(re.search(p, question) for p in _ANALYSIS_KEYWORDS_RE)
+    return False
 
 
 def run(state: GraphState) -> dict:

@@ -528,6 +528,10 @@ def _build_grouped_chart_visualization(rows: list[dict], columns: list[str], tit
 	if time_comparison_grouped_chart:
 		return time_comparison_grouped_chart
 
+	year_month_category_chart = _build_year_month_category_grouped_chart(rows, columns, title, preference)
+	if year_month_category_chart:
+		return year_month_category_chart
+
 	long_form_grouped_chart = _build_long_form_grouped_chart(rows, columns, title, preference)
 	if long_form_grouped_chart:
 		return long_form_grouped_chart
@@ -538,8 +542,15 @@ def _build_grouped_chart_visualization(rows: list[dict], columns: list[str], tit
 
 	numeric_keys = [column for column in columns if column != label_key and _is_measure_column(rows, column)]
 	label_columns = [column for column in columns if column not in numeric_keys]
-	if len(numeric_keys) < 2 or len(label_columns) != 1:
+	# Allow multiple label columns (e.g. item_code + item_name + qty + amount):
+	# use the first label column as the chart axis; extras show in table toggle.
+	if len(numeric_keys) < 2 or len(label_columns) < 1:
 		return None
+
+	# If there's a secondary label column (e.g. item_name alongside item_code),
+	# combine them into a richer display label: "SKU007 – Television"
+	secondary_label_keys = [col for col in label_columns if col != label_key]
+	use_combined_label = len(secondary_label_keys) == 1
 
 	categories = []
 	series = []
@@ -554,6 +565,10 @@ def _build_grouped_chart_visualization(rows: list[dict], columns: list[str], tit
 		if label in (None, ""):
 			return None
 
+		if use_combined_label:
+			secondary = row.get(secondary_label_keys[0])
+			if secondary not in (None, ""):
+				label = f"{label} – {secondary}"
 		categories.append(str(label))
 		for index, metric_key in enumerate(numeric_keys):
 			value = row.get(metric_key)
@@ -708,6 +723,95 @@ def _build_time_comparison_grouped_chart(rows: list[dict], columns: list[str], t
 			"show_table_toggle": True,
 		},
 		"summary": _summarize_long_form_grouped_chart(categories, series_names, series, "YEAR(posting_date)"),
+	}
+
+
+_MONTH_SHORT = {1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
+				7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"}
+
+
+def _build_year_month_category_grouped_chart(
+	rows: list[dict], columns: list[str], title: str, preference: str
+) -> dict | None:
+	"""Handle 4-column shape: YEAR(posting_date) + MONTH(posting_date) + category + metric.
+
+	Builds a grouped chart where x-axis = month-year periods, series = category values.
+	"""
+	if len(columns) != 4:
+		return None
+
+	numeric_keys = [c for c in columns if _is_measure_column(rows, c)]
+	if len(numeric_keys) != 1:
+		return None
+
+	value_key = numeric_keys[0]
+	dimension_keys = [c for c in columns if c != value_key]
+
+	year_key = next((k for k in dimension_keys if k.upper().startswith("YEAR(")), None)
+	month_key = next((k for k in dimension_keys if k.upper().startswith("MONTH(")), None)
+	if not year_key or not month_key:
+		return None
+
+	category_dim = next((k for k in dimension_keys if k != year_key and k != month_key), None)
+	if not category_dim:
+		return None
+
+	categories: list[str] = []
+	series_names: list[str] = []
+	values_by_series_and_category: dict[str, dict[str, float]] = {}
+
+	for row in rows:
+		year = row.get(year_key)
+		month = row.get(month_key)
+		series_name = row.get(category_dim)
+		value = row.get(value_key)
+
+		if year is None or month is None or series_name in (None, "") or not _is_numeric_value(value):
+			return None
+
+		time_label = f"{_MONTH_SHORT.get(int(month), str(int(month)))} {int(year)}"
+		series_label = str(series_name)
+
+		if time_label not in categories:
+			categories.append(time_label)
+		if series_label not in series_names:
+			series_names.append(series_label)
+
+		series_values = values_by_series_and_category.setdefault(series_label, {})
+		series_values[time_label] = series_values.get(time_label, 0.0) + float(value)
+
+	categories, values_by_series_and_category = _bucket_top_n_categories(
+		categories, values_by_series_and_category, series_names,
+	)
+	series_names, values_by_series_and_category = _bucket_top_n_series(
+		series_names, values_by_series_and_category, categories,
+	)
+
+	series = [
+		{
+			"name": name,
+			"data": [values_by_series_and_category.get(name, {}).get(cat, 0.0) for cat in categories],
+		}
+		for name in series_names
+	]
+
+	if not any(any(v != 0 for v in s["data"]) for s in series):
+		return None
+
+	kind, response_type = _pick_grouped_kind(preference, "time", rows, len(series), len(categories))
+	return {
+		"response_type": response_type,
+		"visualization": {
+			"kind": kind,
+			"layout": "vertical",
+			"label_key": "time",
+			"series_key": category_dim,
+			"value_key": value_key,
+			"series": series,
+			"categories": categories,
+			"show_table_toggle": True,
+		},
+		"summary": _summarize_long_form_grouped_chart(categories, series_names, series, category_dim),
 	}
 
 
@@ -897,6 +1001,11 @@ def _should_auto_use_grouped_chart(title: str) -> bool:
 			" vs ",
 			"chart",
 			"graph",
+			# Arabic comparison keywords
+			"قارن",
+			"مقارنة",
+			"مقارنه",
+			"بالمقارنة",
 		)
 	)
 

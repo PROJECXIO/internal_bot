@@ -310,6 +310,10 @@ def _resolve_field_reference(
         if not permitted:
             raise ValueError(f"DocType '{explicit_doctype}' is not part of the declared joins.")
         if fieldname not in permitted:
+            # LLMs often misattribute parent fields to child doctypes.
+            # If the field exists on the primary doctype, use it from there silently.
+            if fieldname in primary_permitted_fields:
+                return f"`tab{primary_doctype}`.`{fieldname}`", alias
             frappe.throw(
                 f"Field '{fieldname}' is not accessible on '{explicit_doctype}'.",
                 frappe.PermissionError,

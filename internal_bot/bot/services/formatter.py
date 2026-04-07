@@ -14,6 +14,11 @@ if TYPE_CHECKING:
 	from internal_bot.bot.state import GraphState
 
 
+_DEBUG_HISTORY_LIMIT = 3
+_DEBUG_HISTORY_CONTENT_LIMIT = 1000
+_DEBUG_CONTEXT_TEXT_LIMIT = 2500
+
+
 def format_structured_response(state: "GraphState") -> dict:
 	"""
 	Convert the final graph state into the API response contract.
@@ -256,19 +261,23 @@ def _should_include_debug_context_window(state: "GraphState") -> bool:
 
 
 def _build_context_window(state: "GraphState") -> dict:
-	history = [
+	full_history = [
 		{
 			"role": message.get("role", ""),
-			"content": message.get("content", ""),
+			"content": _truncate_debug_text(
+				message.get("content", ""),
+				limit=_DEBUG_HISTORY_CONTENT_LIMIT,
+			),
 		}
 		for message in (state.get("chat_history") or [])
 		if message.get("content")
 	]
+	history = full_history[-_DEBUG_HISTORY_LIMIT:]
 	return {
 		"history": history,
-		"memory_summary": state.get("memory_summary") or "",
-		"last_result_context": state.get("last_assistant_context_text") or "",
-		"schema_context": state.get("schema_context") or "",
+		"memory_summary": _truncate_debug_text(state.get("memory_summary") or ""),
+		"last_result_context": _truncate_debug_text(state.get("last_assistant_context_text") or ""),
+		"schema_context": _truncate_debug_text(state.get("schema_context") or ""),
 		"question_context": {
 			"raw_message": state.get("raw_message") or "",
 			"normalized_question": state.get("normalized_question") or "",
@@ -279,6 +288,15 @@ def _build_context_window(state: "GraphState") -> dict:
 			"visualization_preference": state.get("visualization_preference") or "auto",
 		},
 	}
+
+
+def _truncate_debug_text(value: str, limit: int = _DEBUG_CONTEXT_TEXT_LIMIT) -> str:
+	if not value:
+		return ""
+	text = str(value)
+	if len(text) <= limit:
+		return text
+	return text[: limit - 1].rstrip() + "…"
 
 
 def _build_token_usage(state: "GraphState") -> dict:

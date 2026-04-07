@@ -26,6 +26,91 @@ _LEXICAL_ALPHA = 0.6
 _CONTEXT_PREVIOUS_DOCTYPE_BOOST = 0.12
 _CONTEXT_FOLLOW_UP_BOOST = 0.35
 _IDENTIFIER_TOKEN_RE = re.compile(r"(?:[a-z]+[-_]?\d+|\d{4})", re.IGNORECASE)
+_COMPANY_SCOPE_DOWNRANK_FACTOR = 0.25
+_MASTER_ANALYTICS_DOWNRANK_FACTOR = 0.25
+_SALES_ANALYTICS_BOOST = 0.40
+_ANALYTIC_MASTER_DOCTYPES = {"Customer", "Item"}
+_COMPANY_SCOPE_TERMS = {
+    "company",
+    "companies",
+    "business",
+    "organization",
+    "شركة",
+    "شركه",
+}
+_SALES_TERMS = {
+    "sale",
+    "sales",
+    "selling",
+    "revenue",
+    "invoice",
+    "invoices",
+    "order",
+    "orders",
+    "movement",
+    "status",
+    "performance",
+    "مبيعات",
+    "بيع",
+    "فواتير",
+    "فاتورة",
+    "حركة",
+    "حاله",
+    "حالة",
+    "وضع",
+}
+_CUSTOMER_TERMS = {
+    "customer",
+    "customers",
+    "client",
+    "clients",
+    "عميل",
+    "عملاء",
+}
+_ITEM_TERMS = {
+    "item",
+    "items",
+    "sku",
+    "product",
+    "products",
+    "صنف",
+    "اصناف",
+}
+_RANKING_TERMS = {
+    "top",
+    "best",
+    "highest",
+    "strongest",
+    "largest",
+    "most",
+    "first",
+    "افضل",
+    "اعلي",
+    "اعلى",
+    "اكبر",
+    "اقوي",
+    "اقوى",
+}
+_COMPANY_METADATA_TERMS = {
+    "abbr",
+    "abbreviation",
+    "currency",
+    "country",
+    "establishment",
+    "incorporation",
+    "commencement",
+    "target",
+    "default",
+    "address",
+    "contact",
+    "tax",
+    "warehouse",
+    "حساب",
+    "عملة",
+    "دولة",
+    "هدف",
+    "افتراضي",
+}
 
 
 @dataclass
@@ -95,6 +180,71 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     return dot_product / (norm_a * norm_b)
 
 
+def _query_term_set(normalized_query: str, match_query: str, query_tokens: list[str]) -> set[str]:
+    terms = set(query_tokens)
+    for source in (normalized_query, match_query):
+        terms.update(tokenize(source))
+    return {term for term in terms if term}
+
+
+def _looks_like_company_scope_business_query(query_terms: set[str]) -> bool:
+    if not query_terms.intersection(_COMPANY_SCOPE_TERMS):
+        return False
+    if query_terms.intersection(_COMPANY_METADATA_TERMS):
+        return False
+    return bool(
+        query_terms.intersection(_SALES_TERMS)
+        or query_terms.intersection(_ITEM_TERMS)
+        or (
+            query_terms.intersection(_CUSTOMER_TERMS)
+            and query_terms.intersection(_RANKING_TERMS)
+        )
+    )
+
+
+def _looks_like_sales_invoice_analytics_query(query_terms: set[str]) -> bool:
+    if query_terms.intersection(_COMPANY_METADATA_TERMS):
+        return False
+    if query_terms.intersection(_SALES_TERMS):
+        return True
+    return bool(
+        query_terms.intersection(_COMPANY_SCOPE_TERMS)
+        and query_terms.intersection(_CUSTOMER_TERMS)
+        and query_terms.intersection(_RANKING_TERMS)
+    )
+
+
+def _apply_domain_score_adjustments(
+    doctype_name: str,
+    final_score: float,
+    match_reason: str,
+    query_terms: set[str],
+) -> tuple[float, str]:
+    if doctype_name == "Company" and _looks_like_company_scope_business_query(query_terms):
+        return (
+            final_score * _COMPANY_SCOPE_DOWNRANK_FACTOR,
+            f"{match_reason}, company scope downrank",
+        )
+
+    if (
+        doctype_name in _ANALYTIC_MASTER_DOCTYPES
+        and _looks_like_sales_invoice_analytics_query(query_terms)
+        and (
+            query_terms.intersection(_SALES_TERMS)
+            or query_terms.intersection(_RANKING_TERMS)
+        )
+    ):
+        return (
+            final_score * _MASTER_ANALYTICS_DOWNRANK_FACTOR,
+            f"{match_reason}, sales analytics master downrank",
+        )
+
+    if doctype_name == "Sales Invoice" and _looks_like_sales_invoice_analytics_query(query_terms):
+        return final_score + _SALES_ANALYTICS_BOOST, f"{match_reason}, sales analytics boost"
+
+    return final_score, match_reason
+
+
 def rank_candidates(
     query: str,
     corpus: list[CorpusDocument],
@@ -110,6 +260,7 @@ def rank_candidates(
     query_bigrams = make_ngrams(query_tokens, n=2)
     if not query_tokens and not normalized_query:
         return []
+    query_terms = _query_term_set(normalized_query, match_query, query_tokens)
 
     alias_index = get_alias_index()
     candidate_phrases = [normalized_query, match_query, *query_bigrams, *query_tokens]
@@ -143,6 +294,13 @@ def rank_candidates(
                 match_reason = f"{match_reason}, conversation follow-up priority"
             else:
                 match_reason = f"{match_reason}, conversation context priority"
+
+        final_score, match_reason = _apply_domain_score_adjustments(
+            doc.doctype_name,
+            final_score,
+            match_reason,
+            query_terms,
+        )
 
         if final_score <= 0:
             continue

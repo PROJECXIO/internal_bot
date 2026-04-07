@@ -89,6 +89,84 @@ class TestHybridScorer(TestCase):
         self.assertEqual(candidates[0].doctype_name, "Sales Invoice")
         self.assertNotIn("Item", [candidate.doctype_name for candidate in candidates])
 
+    @patch("internal_bot.bot.services.hybrid_scorer.permission_service.filter_permitted_doctypes")
+    @patch("internal_bot.bot.services.hybrid_scorer.get_alias_index")
+    def test_company_scope_sales_query_prefers_sales_invoice_over_company(self, mock_get_alias_index, mock_filter):
+        mock_get_alias_index.return_value = {}
+        mock_filter.side_effect = lambda names, user: names
+        corpus = [
+            _doc("Company", {"company", "monthly", "sales", "target"}),
+            _doc("Sales Invoice", {"sales", "invoice", "customer", "grand", "total"}),
+        ]
+
+        candidates = rank_candidates(
+            query="current sales status for the company",
+            corpus=corpus,
+            user="test@example.com",
+            blocked=set(),
+        )
+
+        self.assertTrue(candidates)
+        self.assertEqual(candidates[0].doctype_name, "Sales Invoice")
+        self.assertIn("sales analytics boost", candidates[0].match_reason)
+        company_candidate = next(candidate for candidate in candidates if candidate.doctype_name == "Company")
+        self.assertIn("company scope downrank", company_candidate.match_reason)
+        decision, selected = classify_confidence(candidates)
+        self.assertEqual(decision, "clear_winner")
+        self.assertEqual([candidate.doctype_name for candidate in selected], ["Sales Invoice"])
+
+    @patch("internal_bot.bot.services.hybrid_scorer.permission_service.filter_permitted_doctypes")
+    @patch("internal_bot.bot.services.hybrid_scorer.get_alias_index")
+    def test_top_customers_in_company_prefers_sales_invoice_over_customer(self, mock_get_alias_index, mock_filter):
+        mock_get_alias_index.return_value = {}
+        mock_filter.side_effect = lambda names, user: names
+        corpus = [
+            _doc("Company", {"company", "customer"}),
+            _doc("Customer", {"customer", "customers", "company"}),
+            _doc("Sales Invoice", {"sales", "invoice", "customer", "customers", "grand", "total"}),
+        ]
+
+        candidates = rank_candidates(
+            query="best three customers in the company",
+            corpus=corpus,
+            user="test@example.com",
+            blocked=set(),
+        )
+
+        self.assertTrue(candidates)
+        self.assertEqual(candidates[0].doctype_name, "Sales Invoice")
+        self.assertIn("sales analytics boost", candidates[0].match_reason)
+        customer_candidate = next(candidate for candidate in candidates if candidate.doctype_name == "Customer")
+        self.assertIn("sales analytics master downrank", customer_candidate.match_reason)
+        decision, selected = classify_confidence(candidates)
+        self.assertEqual(decision, "clear_winner")
+        self.assertEqual([candidate.doctype_name for candidate in selected], ["Sales Invoice"])
+
+    @patch("internal_bot.bot.services.hybrid_scorer.permission_service.filter_permitted_doctypes")
+    @patch("internal_bot.bot.services.hybrid_scorer.get_alias_index")
+    def test_arabic_top_customers_in_company_prefers_sales_invoice(self, mock_get_alias_index, mock_filter):
+        mock_get_alias_index.return_value = {}
+        mock_filter.side_effect = lambda names, user: names
+        corpus = [
+            _doc("Company", {"شركة", "عملاء"}),
+            _doc("Customer", {"عميل", "عملاء"}),
+            _doc("Sales Invoice", {"مبيعات", "فاتورة", "عملاء", "grand", "total"}),
+        ]
+
+        candidates = rank_candidates(
+            query="ايه افضل تلت عملاء في الشركة",
+            corpus=corpus,
+            user="test@example.com",
+            blocked=set(),
+        )
+
+        self.assertTrue(candidates)
+        self.assertEqual(candidates[0].doctype_name, "Sales Invoice")
+        self.assertIn("sales analytics boost", candidates[0].match_reason)
+        decision, selected = classify_confidence(candidates)
+        self.assertEqual(decision, "clear_winner")
+        self.assertEqual([candidate.doctype_name for candidate in selected], ["Sales Invoice"])
+
     def test_exact_alias_match_is_a_clear_winner(self):
         candidates = [
             ScoredCandidate("Sales Invoice", 1.0, 0.0, 0.46, "exact alias match"),

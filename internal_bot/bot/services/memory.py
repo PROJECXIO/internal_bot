@@ -14,6 +14,9 @@ _FOLLOW_UP_PATTERNS = (
 	r"\b(this|that|these|those)\s+(data|result|results|chart|table|numbers)\b",
 	r"\b(more|further|deeper)\b",
 )
+_CONTEXT_ROW_LIMIT = 5
+_CONTEXT_TEXT_LIMIT = 600
+_MESSAGE_CONTENT_LIMIT = 1000
 
 
 def load_chat_memory(session_name: str, window_size: int) -> dict:
@@ -58,15 +61,15 @@ def load_chat_memory(session_name: str, window_size: int) -> dict:
 	enriched_messages = []
 	for m in messages:
 		content = m.content or ""
-		if m.role == "assistant" and m.structured_response:
+		if m.role == "assistant" and m.structured_response and not content:
 			try:
 				resp = frappe.parse_json(m.structured_response) or {}
 			except Exception:
 				resp = {}
 			data_summary = _build_response_context_text(resp)
 			if data_summary:
-				content = f"{content}\n\n[Data context]\n{data_summary}" if content else data_summary
-		enriched_messages.append({"role": m.role, "content": content})
+				content = data_summary
+		enriched_messages.append({"role": m.role, "content": _truncate_context_text(content, _MESSAGE_CONTENT_LIMIT)})
 
 	return {
 		"messages": enriched_messages,
@@ -230,10 +233,19 @@ def _build_response_context_text(response: dict) -> str:
 
 	rows = response.get("rows") or []
 	if rows:
-		parts.append(f"Rows (up to 10): {rows[:10]}")
+		parts.append(f"Rows (up to {_CONTEXT_ROW_LIMIT}): {rows[:_CONTEXT_ROW_LIMIT]}")
 
 	markdown = response.get("markdown")
 	if markdown:
-		parts.append(f"Narrative: {markdown}")
+		parts.append(f"Narrative: {_truncate_context_text(markdown)}")
 
 	return "\n".join(parts)
+
+
+def _truncate_context_text(value: str, limit: int = _CONTEXT_TEXT_LIMIT) -> str:
+	if not value:
+		return ""
+	text = re.sub(r"\s+", " ", value).strip()
+	if len(text) <= limit:
+		return text
+	return text[: limit - 1].rstrip() + "…"

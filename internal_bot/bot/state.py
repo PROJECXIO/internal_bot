@@ -50,6 +50,12 @@ class GraphState(TypedDict, total=False):
     ready_to_query: bool         # True = proceed to query_planner
     clarification_question: str  # question to show the user when not ready
 
+    # ── Node: Presentation Planner ───────────────────────────────────
+    presentation_plan: Optional[dict]  # advisory pre-query data shape and visualization plan
+    pre_query_visualization_preference: str  # "auto" | "card" | "bar" | "pie" | "donut" | "line" | "area" | "stacked_bar" | "heatmap" | "table" | "text"
+    query_shape: str             # "metric" | "category_comparison" | "time_series" | "composition" | "stacked_composition" | "matrix" | "record_list" | "lookup" | "flat_rows" | "auto"
+    presentation_reason: str
+
     # ── Node: Query Planner (replaces sql_generator + validator + executor) ──
     generated_intent: Optional[dict]    # raw JSON intent from LLM (for audit logging)
     validated_intent: Optional[dict]    # intent after permission re-check
@@ -62,10 +68,10 @@ class GraphState(TypedDict, total=False):
 
     # ── Node 7: Result Formatter ─────────────────────────────────────
     formatted_response: dict    # final API response
-    response_type: str          # "metric_card" | "bar_chart" | "pie_chart" | "donut_chart" | "line_chart" | "area_chart" | "stacked_bar_chart" | "table" | "empty"
+    response_type: str          # "metric_card" | "bar_chart" | "pie_chart" | "donut_chart" | "line_chart" | "area_chart" | "stacked_bar_chart" | "heatmap_chart" | "table" | "empty"
     visualization: Optional[dict]
     summary: str
-    visualization_preference: str  # "auto" | "card" | "bar" | "pie" | "donut" | "line" | "area" | "stacked_bar" | "text"
+    visualization_preference: str  # "auto" | "card" | "bar" | "pie" | "donut" | "line" | "area" | "stacked_bar" | "heatmap" | "text"
     answer_prefix: str             # friendly intro sentence, e.g. "Here's what I found:"
     answer_markdown: str           # markdown answer or brief shown in the frontend
 

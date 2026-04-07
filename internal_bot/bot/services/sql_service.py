@@ -148,6 +148,23 @@ if they are not shown in the schema table.
 (e.g. "customer", "posting_date"). NEVER use dotted notation like "items.item_code" \
 or "Sales Invoice Item.item_code" as a filter field in list mode — this will silently \
 return wrong results. If you need to filter by a child table field, use "analytics" mode.
+22. The ## Presentation Plan (Advisory) section, when present, is only a planning hint. \
+The user's question and available schema override it. Never use fields or DocTypes that \
+are not present in the schema context. If the plan says metric/card, prefer one aggregate \
+with no dimensions unless the user explicitly asks for a grouping such as "by", "per", \
+"each", "breakdown", or "grouped". Ignore dimension_hints for metric/card plans; those \
+hints may identify business context, not GROUP BY fields. If it says time_series/line/area, \
+include a date or time dimension and a metric when the schema supports it. If it says \
+category_comparison/bar, include one category dimension and one metric. If it says \
+composition/donut/pie, produce category plus metric data with a small limit. If it says \
+stacked_composition/stacked_bar, use two dimensions plus one metric only when the user \
+asks for a two-level breakdown. If it says matrix/heatmap, use two categorical dimensions \
+plus one metric when the schema supports it. For item/SKU/product movement or sales per customer, \
+including Arabic phrasing like "حركة الاصناف عند كل عميل", prefer two dimensions \
+(customer + item/SKU/product) plus one metric when the schema supports it, but do not \
+override the user's explicit request. \
+If it says record_list/lookup/table/text, do not force \
+aggregation.
 """
 
 
@@ -159,6 +176,7 @@ def generate_query_intent(
     current_date: str | None = None,
     current_day_name: str | None = None,
     current_year: int | None = None,
+    presentation_plan: dict | None = None,
     attempt: int = 0,
     previous_error: str | None = None,
     trace_metadata: dict | None = None,
@@ -189,6 +207,11 @@ def generate_query_intent(
     user_parts.append(f"## Current Date\n{resolved_date}")
     user_parts.append(f"## Current Day\n{resolved_day_name}")
     user_parts.append(f"## Current Year\n{resolved_year}")
+    if presentation_plan:
+        user_parts.append(
+            "## Presentation Plan (Advisory)\n"
+            f"{json.dumps(_compact_presentation_plan(presentation_plan), ensure_ascii=True)}"
+        )
     user_parts.append(f"## Question\n{question}")
 
     if attempt > 0 and previous_error:
@@ -208,7 +231,45 @@ def generate_query_intent(
         trace_metadata=trace_metadata,
         trace_tags=trace_tags,
     )
-    return _parse_intent(raw)
+    intent = _parse_intent(raw)
+    return _apply_presentation_plan_to_intent(intent, presentation_plan, question)
+
+
+def _compact_presentation_plan(plan: dict) -> dict:
+    if not isinstance(plan, dict):
+        return {}
+    allowed_keys = (
+        "visualization",
+        "query_shape",
+        "dimension_hints",
+        "metric_hints",
+        "limit_hint",
+        "reason",
+    )
+    return {key: plan.get(key) for key in allowed_keys if plan.get(key) not in (None, "", [])}
+
+
+def _apply_presentation_plan_to_intent(
+    intent: dict,
+    presentation_plan: dict | None,
+    question: str,
+) -> dict:
+    """Apply narrow, safe shape constraints from the advisory presentation plan."""
+    if not isinstance(presentation_plan, dict):
+        return intent
+
+    visualization = str(presentation_plan.get("visualization") or "").lower()
+    query_shape = str(presentation_plan.get("query_shape") or "").lower()
+    if visualization != "card" and query_shape != "metric":
+        return intent
+    if _question_requests_grouping(question):
+        return intent
+    if intent.get("mode") != "analytics" or not intent.get("dimensions"):
+        return intent
+
+    normalized_intent = dict(intent)
+    normalized_intent["dimensions"] = []
+    return normalized_intent
 
 
 def _parse_intent(raw: str) -> dict:
@@ -292,6 +353,14 @@ def _repair_json_like_string(raw: str) -> str:
 _MONTH_DIM_RE = re.compile(r"^MONTH\((.+)\)$", re.IGNORECASE)
 _YEAR_DIM_RE = re.compile(r"^YEAR\((.+)\)$", re.IGNORECASE)
 _YEAR_MONTH_DIM_RE = re.compile(r"^YEAR_MONTH\((.+)\)$", re.IGNORECASE)
+_GROUPING_REQUEST_RE = re.compile(
+    r"\b(by|per|each|every|breakdown|group(?:ed|ing)?|compare|comparison)\b|حسب|لكل",
+    re.IGNORECASE,
+)
+
+
+def _question_requests_grouping(question: str) -> bool:
+    return bool(_GROUPING_REQUEST_RE.search(question or ""))
 
 
 def _normalize_time_dimensions(intent: dict) -> dict:

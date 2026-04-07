@@ -268,7 +268,7 @@
                 <div class="chart-dialog__body">
                   <VueApexCharts
                     :type="chartType"
-                    height="420"
+                    :height="expandedChartHeight"
                     :options="expandedChartOptions"
                     :series="chartSeries"
                   />
@@ -497,7 +497,7 @@ const closeIconSvg = `
 `.trim();
 
 const isChartResponse = computed(() =>
-  ["bar_chart", "pie_chart", "donut_chart", "line_chart", "area_chart", "stacked_bar_chart"].includes(props.message.responseType)
+  ["bar_chart", "pie_chart", "donut_chart", "line_chart", "area_chart", "stacked_bar_chart", "heatmap_chart"].includes(props.message.responseType)
 );
 
 const bubbleStyle = computed(() => {
@@ -508,7 +508,19 @@ const bubbleStyle = computed(() => {
   };
 });
 
-const inlineChartHeight = computed(() => (isInlineChartExpanded.value ? 420 : 260));
+const inlineChartHeight = computed(() => {
+  if (props.message.visualization?.kind === "heatmap") {
+    const rowCount = props.message.visualization?.series?.length || 0;
+    const baseHeight = Math.max(300, Math.min(520, rowCount * 34 + 150));
+    return isInlineChartExpanded.value ? Math.max(480, baseHeight) : baseHeight;
+  }
+  return isInlineChartExpanded.value ? 420 : 260;
+});
+const expandedChartHeight = computed(() => {
+  if (props.message.visualization?.kind !== "heatmap") return 420;
+  const rowCount = props.message.visualization?.series?.length || 0;
+  return Math.max(480, Math.min(680, rowCount * 38 + 170));
+});
 
 const chartType = computed(() => {
   const kind = props.message.visualization?.kind;
@@ -516,6 +528,7 @@ const chartType = computed(() => {
   if (kind === "donut") return "donut";
   if (kind === "line" || kind === "grouped_line") return "line";
   if (kind === "area") return "area";
+  if (kind === "heatmap") return "heatmap";
   return "bar";
 });
 
@@ -601,7 +614,7 @@ const chartSeries = computed(() => {
 // Compute highest/lowest indices for bar charts
 const chartHighLow = computed(() => {
   const visualization = props.message.visualization;
-  if (!visualization || ["pie", "donut", "grouped_bar", "stacked_bar", "grouped_line"].includes(visualization.kind)) return null;
+  if (!visualization || ["pie", "donut", "grouped_bar", "stacked_bar", "grouped_line", "heatmap"].includes(visualization.kind)) return null;
 
   const data = visualization.series?.[0]?.data || [];
   if (data.length < 2) return null;
@@ -620,7 +633,7 @@ const chartHighLow = computed(() => {
 function buildChartOptions(expanded = false) {
   const visualization = props.message.visualization;
   const categories = visualization?.categories || [];
-  const groupedKinds = ["grouped_bar", "stacked_bar", "grouped_line"];
+  const groupedKinds = ["grouped_bar", "stacked_bar", "grouped_line", "heatmap"];
   const valueLabel = visualization?.value_key?.replaceAll("_", " ")
     || (groupedKinds.includes(visualization?.kind) ? "Metrics" : "Value");
   const isGroupedBar = visualization?.kind === "grouped_bar";
@@ -789,6 +802,60 @@ function buildChartOptions(expanded = false) {
       colors: ["#0f766e"],
       tooltip: {
         y: { formatter: (value) => formatChartValue(value) },
+      },
+    };
+  }
+
+  if (visualization?.kind === "heatmap") {
+    return {
+      chart: {
+        toolbar: {
+          show: true,
+          tools: { download: downloadIconSvg, selection: false, zoom: false, zoomin: false, zoomout: false, pan: false, reset: false },
+        },
+      },
+      dataLabels: {
+        enabled: false,
+      },
+      plotOptions: {
+        heatmap: {
+          shadeIntensity: 0.55,
+          radius: 4,
+          useFillColorAsStroke: true,
+          colorScale: {
+            ranges: [
+              { from: -Number.MAX_SAFE_INTEGER, to: -0.000001, color: "#f59e0b", name: "Negative" },
+              { from: 0, to: 0, color: "#e2e8f0", name: "None" },
+              { from: 0.000001, to: Number.MAX_SAFE_INTEGER, color: "#0f766e", name: valueLabel },
+            ],
+          },
+        },
+      },
+      xaxis: {
+        categories,
+        labels: {
+          rotate: expanded ? -12 : -20,
+          style: { fontSize: expanded ? "12px" : "11px" },
+        },
+      },
+      yaxis: {
+        title: { text: visualization?.y_key?.replaceAll("_", " ") || "" },
+        labels: { style: { fontSize: expanded ? "12px" : "11px" } },
+      },
+      legend: {
+        show: false,
+      },
+      tooltip: {
+        y: {
+          formatter: (value) => formatChartValue(value),
+          title: {
+            formatter: (seriesName) => seriesName,
+          },
+        },
+      },
+      colors: ["#0f766e"],
+      grid: {
+        padding: { right: 12, left: 12 },
       },
     };
   }

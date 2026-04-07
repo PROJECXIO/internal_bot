@@ -31,7 +31,7 @@ Rules:
 - No code fences.
 - Use short, direct phrasing.
 - For response_type "plain_text", answer the question directly in markdown.
-- For response_type "metric_card", "bar_chart", "pie_chart", and "table", write a quick brief that fits above the visualization.
+- For response_type "metric_card", "bar_chart", "pie_chart", "heatmap_chart", and "table", write a quick brief that fits above the visualization.
 - Prefer one short paragraph, or 2-3 short bullets when that is clearer.
 - Sound like a professional data analyst, not a casual chatbot.
 - Use strong markdown emphasis for important business facts:
@@ -43,6 +43,9 @@ Rules:
 - Keep the answer clean and readable, not decorative.
 - Do not mention SQL, internal processing, or implementation details.
 - Do not repeat `answer_prefix` in the markdown.
+- Do not ask clarification or follow-up questions in a success answer. If rows
+  are present, answer from the provided data. Never write phrases like "do you
+  mean", "do you want", "هل تقصد", or "هل تريد" in a success answer.
 - if user ask for dirct answer to a specific question about the data (e.g. "which is the highest", "who is the lowest", "what was it"), give a direct one-line answer naming that item and its value. Do NOT list all items or re-narrate the full dataset.
 - If the response is a category comparison chart, prefer analyst-style observations such as the leader, close runner-up, laggard, spread, or concentration.
 - If this is a follow-up to a previous result AND the question asks for a specific item
@@ -158,6 +161,9 @@ def run(state: GraphState) -> dict:
 			_clean_markdown(raw),
 			state.get("answer_prefix") or "",
 		)
+		if _looks_like_clarification_question(answer_markdown) and rows:
+			trace.detail(state, "Answer markdown replaced", "clarification-like success answer")
+			answer_markdown = _build_success_fallback_markdown(state, preview_response, rows)
 		if analysis_mode and not answer_markdown:
 			answer_markdown = _build_analysis_fallback(rows)
 		trace.detail(state, "Answer markdown", answer_markdown[:120] if answer_markdown else "")
@@ -219,10 +225,73 @@ def _strip_repeated_prefix(markdown: str, answer_prefix: str) -> str:
 	for candidate in (text, re.sub(r"^#+\s*", "", text, count=1).strip()):
 		normalized_candidate = re.sub(r"[\s:.-]+$", "", candidate).lower()
 		if normalized_candidate.startswith(normalized_prefix):
-			remainder = candidate[len(prefix):].lstrip(" :-\n")
+			remainder = candidate[len(prefix):].lstrip(" :\n")
 			return remainder or text
 
 	return text
+
+
+_CLARIFICATION_QUESTION_RE = re.compile(
+	r"\b(do you mean|did you mean|do you want|would you like|should i|can you clarify|could you clarify)\b|هل\s+(?:تقصد|تريد)|أتعني|هل\s+يمكنك\s+توضيح",
+	re.IGNORECASE,
+)
+
+
+def _looks_like_clarification_question(markdown: str) -> bool:
+	text = (markdown or "").strip()
+	if not text:
+		return False
+	if not _CLARIFICATION_QUESTION_RE.search(text):
+		return False
+	return "?" in text or "؟" in text
+
+
+def _build_success_fallback_markdown(state: GraphState, preview_response: dict, rows: list[dict]) -> str:
+	response_language = state.get("response_language") or state.get("user_profile_language") or "en"
+	columns = list(rows[0].keys()) if rows else []
+
+	if len(rows) == 1 and columns:
+		parts = []
+		for column in columns[:4]:
+			value = rows[0].get(column)
+			if value in (None, ""):
+				continue
+			label = _humanize_column_label(column, response_language)
+			parts.append(f"**{label}**: **{_format_result_value(value)}**")
+		if parts:
+			if response_language == "ar":
+				return "النتيجة: " + "، ".join(parts) + "."
+			return "Result: " + ", ".join(parts) + "."
+
+	summary = (preview_response.get("summary") or "").strip()
+	if response_language != "ar" and summary:
+		return summary
+	if response_language == "ar":
+		return f"تم العثور على **{len(rows)}** نتائج. راجع الرسم أو الجدول للتفاصيل."
+	return f"Found **{len(rows)}** results."
+
+
+def _humanize_column_label(column: str, response_language: str) -> str:
+	label = (column or "").strip()
+	if response_language == "ar":
+		arabic_labels = {
+			"total_sales": "إجمالي المبيعات",
+			"grand_total": "الإجمالي",
+			"record_count": "عدد السجلات",
+			"count": "العدد",
+			"customer": "العميل",
+			"customer_name": "اسم العميل",
+		}
+		return arabic_labels.get(label, label.replace("_", " "))
+	return label.replace("_", " ").title()
+
+
+def _format_result_value(value) -> str:
+	if _is_numeric_value(value):
+		return _format_number(value)
+	if isinstance(value, (datetime.date, datetime.datetime)):
+		return str(value)
+	return str(value)
 
 
 def _is_analysis_request(state: GraphState) -> bool:
@@ -272,6 +341,8 @@ def _determine_row_limit(
 ) -> int:
 	if analysis_mode:
 		return min(row_count, 25)
+	if response_type == "heatmap_chart":
+		return min(row_count, 50)
 	if visualization_kind == "grouped_bar":
 		return min(row_count, 25)
 	if response_type in {"bar_chart", "pie_chart", "table"}:

@@ -12,12 +12,14 @@ Graph topology:
                        ├─ [no_schema]          → result_formatter
                        ├─ [needs_resolution]   → intent_resolver  ← thinking node
                        │                              ↓ (conditional)
-                       │                              ├─ [resolved]          → query_planner
+                       │                              ├─ [resolved]          → presentation_planner
                        │                              └─ [needs_clarification]→ clarification_planner
                        │                                                            ↓ (conditional)
-                       │                                                            ├─ [ready] → query_planner
+                       │                                                            ├─ [ready] → presentation_planner
                        │                                                            └─ [ask]   → result_formatter
-                       └─ [schema_found]        → query_planner
+                       └─ [schema_found]        → presentation_planner
+                                                       ↓
+                                                query_planner
                                                        ↓ (conditional, self-loop on retry)
                                                        ├─ [success]  → visualization_planner
                                                        │                  ↓
@@ -42,6 +44,7 @@ from internal_bot.bot.nodes import (
     intent_classifier,
     intent_resolver,
     memory_loader,
+    presentation_planner,
     query_planner,
     result_formatter,
     schema_discovery,
@@ -84,7 +87,7 @@ def _route_after_schema(state: GraphState) -> str:
     if any(p in question for p in _PERIOD_PLACEHOLDERS):
         trace.route(state, "clarification_planner")
         return "needs_clarification"
-    trace.route(state, "query_planner")
+    trace.route(state, "presentation_planner")
     return "schema_found"
 
 
@@ -96,7 +99,7 @@ def _route_after_intent_resolver(state: GraphState) -> str:
         if any(p in question for p in _PERIOD_PLACEHOLDERS):
             trace.route(state, "clarification_planner")
             return "needs_clarification"
-        trace.route(state, "query_planner")
+        trace.route(state, "presentation_planner")
         return "resolved"
     trace.route(state, "clarification_planner")
     return "needs_clarification"
@@ -104,7 +107,7 @@ def _route_after_intent_resolver(state: GraphState) -> str:
 
 def _route_after_clarification(state: GraphState) -> str:
     if state.get("ready_to_query"):
-        trace.route(state, "query_planner")
+        trace.route(state, "presentation_planner")
         return "ready"
     trace.route(state, "result_formatter")
     return "ask"
@@ -136,6 +139,7 @@ def _build_graph():
     g.add_node("schema_discovery", schema_discovery.run)
     g.add_node("intent_resolver", intent_resolver.run)
     g.add_node("clarification_planner", clarification_planner.run)
+    g.add_node("presentation_planner", presentation_planner.run)
     g.add_node("query_planner", query_planner.run)
     g.add_node("visualization_planner", visualization_planner.run)
     g.add_node("answer_composer", answer_composer.run)
@@ -166,7 +170,7 @@ def _build_graph():
             "no_schema": "result_formatter",
             "needs_resolution": "intent_resolver",
             "needs_clarification": "clarification_planner",
-            "schema_found": "query_planner",
+            "schema_found": "presentation_planner",
         },
     )
 
@@ -175,7 +179,7 @@ def _build_graph():
         "intent_resolver",
         _route_after_intent_resolver,
         {
-            "resolved": "query_planner",
+            "resolved": "presentation_planner",
             "needs_clarification": "clarification_planner",
         },
     )
@@ -185,10 +189,12 @@ def _build_graph():
         "clarification_planner",
         _route_after_clarification,
         {
-            "ready": "query_planner",
+            "ready": "presentation_planner",
             "ask": "result_formatter",
         },
     )
+
+    g.add_edge("presentation_planner", "query_planner")
 
     # query_planner → branch on success / retry (self-loop) / give_up
     g.add_conditional_edges(

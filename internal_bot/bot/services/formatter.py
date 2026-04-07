@@ -96,6 +96,9 @@ def format_structured_response(state: "GraphState") -> dict:
 			"schema_confidence": state.get("schema_confidence"),
 			"schema_decision": state.get("schema_decision"),
 			"schema_candidates": state.get("schema_candidates", []),
+			"presentation_plan": state.get("presentation_plan"),
+			"pre_query_visualization_preference": state.get("pre_query_visualization_preference"),
+			"query_shape": state.get("query_shape"),
 			"generated_intent": state.get("generated_intent"),
 			"compiled_sql": state.get("compiled_sql"),
 			"retries": state.get("query_generation_attempts", 0),
@@ -162,7 +165,7 @@ def _should_force_text_explanation(state: "GraphState", preference: str) -> bool
 	last_response = state.get("last_assistant_response") or {}
 	return last_response.get("response_type") in {
 		"bar_chart", "pie_chart", "donut_chart", "line_chart", "area_chart",
-		"stacked_bar_chart", "metric_card", "table",
+		"stacked_bar_chart", "heatmap_chart", "metric_card", "table",
 	}
 
 
@@ -445,8 +448,12 @@ def _build_metric_visualization(rows: list[dict], columns: list[str], title: str
 
 
 def _build_chart_visualization(rows: list[dict], columns: list[str], title: str, preference: str) -> dict | None:
-	if preference not in {"bar", "pie", "donut", "line", "area", "stacked_bar", "auto"}:
+	if preference not in {"bar", "pie", "donut", "line", "area", "stacked_bar", "heatmap", "auto"}:
 		return None
+
+	heatmap_payload = _build_heatmap_visualization(rows, columns, title, preference)
+	if heatmap_payload:
+		return heatmap_payload
 
 	if len(columns) < 2:
 		return None
@@ -515,6 +522,76 @@ def _build_chart_visualization(rows: list[dict], columns: list[str], title: str,
 		"response_type": response_type,
 		"visualization": visualization,
 		"summary": _summarize_chart(categories, values, value_key, kind),
+	}
+
+
+def _build_heatmap_visualization(rows: list[dict], columns: list[str], title: str, preference: str) -> dict | None:
+	if preference != "heatmap":
+		return None
+	if len(columns) != 3:
+		return None
+
+	numeric_keys = [column for column in columns if _is_measure_column(rows, column)]
+	if len(numeric_keys) != 1:
+		return None
+
+	value_key = numeric_keys[0]
+	dimension_keys = [column for column in columns if column != value_key]
+	if len(dimension_keys) != 2:
+		return None
+
+	y_key, x_key = _pick_heatmap_axes(rows, dimension_keys)
+	x_labels: list[str] = []
+	y_labels: list[str] = []
+	values_by_y_and_x: dict[str, dict[str, float]] = {}
+
+	for row in rows:
+		x_value = row.get(x_key)
+		y_value = row.get(y_key)
+		metric_value = row.get(value_key)
+		if x_value in (None, "") or y_value in (None, "") or not _is_numeric_value(metric_value):
+			return None
+
+		x_label = str(x_value)
+		y_label = str(y_value)
+		if x_label not in x_labels:
+			x_labels.append(x_label)
+		if y_label not in y_labels:
+			y_labels.append(y_label)
+
+		y_values = values_by_y_and_x.setdefault(y_label, {})
+		y_values[x_label] = y_values.get(x_label, 0.0) + float(metric_value)
+
+	if not x_labels or not y_labels:
+		return None
+
+	series = [
+		{
+			"name": y_label,
+			"data": [
+				{"x": x_label, "y": values_by_y_and_x.get(y_label, {}).get(x_label, 0.0)}
+				for x_label in x_labels
+			],
+		}
+		for y_label in y_labels
+	]
+
+	if not any(any(point["y"] != 0 for point in item["data"]) for item in series):
+		return None
+
+	return {
+		"response_type": "heatmap_chart",
+		"visualization": {
+			"kind": "heatmap",
+			"x_key": x_key,
+			"y_key": y_key,
+			"value_key": value_key,
+			"series": series,
+			"categories": x_labels,
+			"y_categories": y_labels,
+			"show_table_toggle": True,
+		},
+		"summary": _summarize_heatmap(x_key, y_key, value_key, series),
 	}
 
 
@@ -647,7 +724,13 @@ def _build_long_form_grouped_chart(rows: list[dict], columns: list[str], title: 
 	if not any(any(value != 0 for value in metric["data"]) for metric in series):
 		return None
 
-	kind, response_type = _pick_grouped_kind(preference, label_key, rows, len(series), len(categories))
+	kind, response_type = _pick_grouped_kind(
+		preference,
+		label_key,
+		rows,
+		len(series),
+		len(categories),
+	)
 	return {
 		"response_type": response_type,
 		"visualization": {
@@ -978,6 +1061,30 @@ def _pick_long_form_grouping_keys(rows: list[dict], dimension_keys: list[str], t
 	return dimension_keys[0], dimension_keys[1]
 
 
+def _pick_heatmap_axes(rows: list[dict], dimension_keys: list[str]) -> tuple[str, str]:
+	customer_key = next((column for column in dimension_keys if _is_customer_column(column)), None)
+	item_key = next((column for column in dimension_keys if _is_item_column(column)), None)
+	if customer_key and item_key:
+		return customer_key, item_key
+
+	date_key = next((column for column in dimension_keys if _is_date_like_column(rows, column)), None)
+	if date_key:
+		other_key = next(column for column in dimension_keys if column != date_key)
+		return other_key, date_key
+
+	return dimension_keys[0], dimension_keys[1]
+
+
+def _is_customer_column(column: str) -> bool:
+	name = (column or "").lower()
+	return any(part in name for part in ("customer", "client", "party"))
+
+
+def _is_item_column(column: str) -> bool:
+	name = (column or "").lower()
+	return any(part in name for part in ("item", "sku", "product", "stock"))
+
+
 def _is_date_like_column(rows: list[dict], column: str) -> bool:
 	column_name = (column or "").lower()
 	if "date" in column_name or "year_month" in column_name:
@@ -1161,6 +1268,27 @@ def _summarize_long_form_grouped_chart(
 	return (
 		f"{leader} is highest overall at {_format_metric_value(leader_total)} across "
 		f"{len(series_names)} {series_label} groups."
+	)
+
+
+def _summarize_heatmap(x_key: str, y_key: str, value_key: str, series: Sequence[dict]) -> str:
+	max_point = None
+	max_series = ""
+	for row in series:
+		for point in row.get("data", []):
+			value = point.get("y")
+			if not _is_numeric_value(value):
+				continue
+			if max_point is None or value > max_point.get("y"):
+				max_point = point
+				max_series = row.get("name", "")
+
+	if not max_point:
+		return f"Heatmap by {_humanize_column_label(y_key)} and {_humanize_column_label(x_key)}."
+
+	return (
+		f"{max_series} × {max_point.get('x')} is highest at "
+		f"{_format_metric_value(max_point.get('y'))} {_humanize_column_label(value_key)}."
 	)
 
 

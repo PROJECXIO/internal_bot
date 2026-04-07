@@ -177,3 +177,36 @@ class TestAnswerComposer(TestCase):
 		self.assertIn("المنطقة الغربية", result["answer_markdown"])
 		payload = json.loads(llm.chat_completion.call_args.args[0][1]["content"])
 		self.assertEqual(payload["response_language"], "Arabic")
+
+	def test_clarification_like_success_answer_is_replaced_with_data_fallback(self):
+		llm = MagicMock()
+		llm.provider = "MockLLM"
+		llm.model = "mock-model"
+		llm.last_input_tokens = 8
+		llm.last_output_tokens = 6
+		llm.chat_completion.return_value = (
+			"هل تقصد أن هناك عملاء آخرين يجب أن يظهروا في النتائج؟\n\n"
+			"هل تريد عرض جميع العملاء؟"
+		)
+
+		state = {
+			"raw_message": "هاي ايه مبيعات العملا",
+			"normalized_question": "هاي ايه مبيعات العملا",
+			"query_result_rows": [{"total_sales": 125000}],
+			"response_language": "ar",
+			"visualization_preference": "card",
+			"answer_prefix": "إجمالي المبيعات:",
+			"input_tokens": 0,
+			"output_tokens": 0,
+			"_llm_client": llm,
+			"node_trace": [],
+			"timing": {},
+		}
+
+		result = answer_composer.run(state)
+
+		self.assertNotIn("هل تقصد", result["answer_markdown"])
+		self.assertNotIn("هل تريد", result["answer_markdown"])
+		self.assertIn("إجمالي المبيعات", result["answer_markdown"])
+		self.assertIn("125,000", result["answer_markdown"])
+		self.assertEqual(result["formatted_response"]["status"], "success")

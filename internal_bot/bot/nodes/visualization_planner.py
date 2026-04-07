@@ -7,7 +7,7 @@ Uses the LLM to:
 2. Generate a short, friendly intro sentence shown above the result.
 
 Sets in state:
-  visualization_preference  — "card" | "bar" | "pie" | "donut" | "line" | "area" | "stacked_bar" | "text" | "auto"
+  visualization_preference  — "card" | "bar" | "pie" | "donut" | "line" | "area" | "stacked_bar" | "heatmap" | "text" | "auto"
   answer_prefix             — e.g. "Here's the breakdown you asked for:"
 """
 import json
@@ -23,7 +23,7 @@ from internal_bot.bot.services.language import (
 )
 from internal_bot.bot import progress, trace
 
-_VALID_PREFERENCES = {"card", "bar", "pie", "donut", "line", "area", "stacked_bar", "text", "auto"}
+_VALID_PREFERENCES = {"card", "bar", "pie", "donut", "line", "area", "stacked_bar", "heatmap", "text", "auto"}
 
 _SYSTEM_PROMPT = """\
 You are a data presentation assistant for an ERP chatbot.
@@ -37,6 +37,7 @@ visualization choices:
 - "line"  — time-series or trend data; prefer when x-axis is temporal (dates, months, years, quarters) and there are more than 4 data points
 - "area"  — time-series emphasizing volume, magnitude, or cumulative values with a filled line
 - "stacked_bar" — composition across categories where each bar should show total plus a breakdown into parts
+- "heatmap" — matrix-style customer by item/product/category movement where color intensity shows the metric
 - "pie"   — proportions, shares, breakdowns, distributions, or "how much of the total" questions with 2–8 categories; also good for comparing a few items' contributions
 - "text"  — factual lookup, large table, or when no chart fits
 - "auto"  — genuinely uncertain; let the system decide
@@ -49,7 +50,9 @@ If the x-axis is a time dimension (months, dates, years) and there are more than
 When the question is about shares, proportions, breakdowns, or distribution across a small number of categories (2–8), prefer "donut" over "pie".
 When the question is about temporal volume or magnitude, "area" is a good choice.
 When each category contains multiple component parts and the user should see both the total and the composition, prefer "stacked_bar".
-When the question is about ranking, top/bottom, or time-based comparisons, prefer "bar" or "line".\
+For item/SKU/product movement or sales per customer, including Arabic phrasing like "حركة الاصناف عند كل عميل", prefer "heatmap" when the data has customer + item + numeric metric columns and the result is a broad matrix.
+When the question is about ranking, top/bottom, or time-based comparisons, prefer "bar" or "line". \
+If an advisory presentation plan is provided, consider it only as a hint. The actual columns, row count, and sample rows win when they conflict. \
 Return the prefix in the requested response language.\
 """
 
@@ -92,6 +95,7 @@ def run(state: GraphState) -> dict:
     user_content = (
         f"Question: {question}\n"
         f"Response language: {language_name_for_prompt(response_language)}\n"
+        f"Advisory presentation plan: {json.dumps(state.get('presentation_plan') or {}, ensure_ascii=True)}\n"
         f"Columns: {columns}\n"
         f"Row count: {len(rows)}\n"
         f"Sample (first 3 rows): {_safe_sample(rows, 3)}"

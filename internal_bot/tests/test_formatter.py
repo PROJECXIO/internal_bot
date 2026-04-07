@@ -648,6 +648,41 @@ class TestStructuredFormatter(TestCase):
 		self.assertEqual(response["response_type"], "stacked_bar_chart")
 		self.assertEqual(response["visualization"]["kind"], "stacked_bar")
 
+	def test_explicit_heatmap_preference_returns_heatmap_chart(self):
+		response = format_structured_response(
+			{
+				**self._base_state(
+					[
+						{"customer": "Grant Plastics Ltd.", "item_code": "SKU001", "total_sales": 67000},
+						{"customer": "Grant Plastics Ltd.", "item_code": "SKU002", "total_sales": 15000},
+						{"customer": "West View Software Ltd.", "item_code": "SKU001", "total_sales": 91000},
+						{"customer": "West View Software Ltd.", "item_code": "SKU003", "total_sales": 45000},
+						{"customer": "Palmer Productions Ltd.", "item_code": "SKU002", "total_sales": 15000},
+					],
+					message="حركة الاصناف عند كل عميل",
+				),
+				"visualization_preference": "heatmap",
+			}
+		)
+
+		self.assertEqual(response["response_type"], "heatmap_chart")
+		self.assertEqual(response["visualization"]["kind"], "heatmap")
+		self.assertEqual(response["visualization"]["y_key"], "customer")
+		self.assertEqual(response["visualization"]["x_key"], "item_code")
+		self.assertEqual(response["visualization"]["categories"], ["SKU001", "SKU002", "SKU003"])
+		self.assertEqual(
+			response["visualization"]["y_categories"],
+			["Grant Plastics Ltd.", "West View Software Ltd.", "Palmer Productions Ltd."],
+		)
+		self.assertEqual(
+			response["visualization"]["series"][0]["data"],
+			[
+				{"x": "SKU001", "y": 67000.0},
+				{"x": "SKU002", "y": 15000.0},
+				{"x": "SKU003", "y": 0.0},
+			],
+		)
+
 	def test_many_series_bucketed_into_others(self):
 		"""When more than 6 series exist, extras are merged into 'Others'."""
 		rows = []

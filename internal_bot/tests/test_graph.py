@@ -83,7 +83,8 @@ def _base_state(raw_message: str, llm_client=None, settings=None, debug=False) -
 	}
 
 
-# JSON responses for the query_planner's LLM call
+# JSON responses for the presentation/query/visualization LLM calls
+_PRESENTATION_PLAN = '{"visualization": "auto", "query_shape": "auto", "dimension_hints": [], "metric_hints": [], "limit_hint": 20, "reason": "default"}'
 _LIST_INTENT = '{"mode": "list", "doctype": "Customer", "fields": ["name", "customer_name"], "filters": [], "order_by": "creation desc", "limit": 10}'
 _ANALYTICS_INTENT = '{"mode": "analytics", "primary_doctype": "Sales Invoice", "joins": [], "dimensions": [], "metrics": [{"func": "SUM", "field": "grand_total", "alias": "total_sales"}], "filters": [], "limit": 1}'
 _VIZ_TEXT = "{\"visualization\": \"text\", \"prefix\": \"Here's what I found:\"}"
@@ -153,7 +154,7 @@ class TestGraphIntegration(FrappeTestCase):
 		"""A valid question with a valid intent should return status: success."""
 		intent_response = '{"intent": "query", "normalized_question": "show all customers", "reason": "", "clarification_options": []}'
 
-		llm = _make_mock_llm([intent_response, _LIST_INTENT, _VIZ_TEXT, _ANSWER_MARKDOWN])
+		llm = _make_mock_llm([intent_response, _PRESENTATION_PLAN, _LIST_INTENT, _VIZ_TEXT, _ANSWER_MARKDOWN])
 		state = _base_state("show all customers", llm_client=llm)
 
 		graph = get_graph()
@@ -181,7 +182,7 @@ class TestGraphIntegration(FrappeTestCase):
 		)
 		viz_response = '{"visualization": "text", "prefix": "إليك ما وجدته:"}'
 
-		llm = _make_mock_llm([intent_response, _LIST_INTENT, viz_response, _ANSWER_MARKDOWN_AR])
+		llm = _make_mock_llm([intent_response, _PRESENTATION_PLAN, _LIST_INTENT, viz_response, _ANSWER_MARKDOWN_AR])
 		state = _base_state("اعرض كل العملاء", llm_client=llm)
 
 		graph = get_graph()
@@ -205,7 +206,7 @@ class TestGraphIntegration(FrappeTestCase):
 	def test_node_trace_contains_all_nodes_for_successful_query(self):
 		intent_response = '{"intent": "query", "normalized_question": "show customers", "reason": "", "clarification_options": []}'
 
-		llm = _make_mock_llm([intent_response, _LIST_INTENT, _VIZ_TEXT, _ANSWER_MARKDOWN])
+		llm = _make_mock_llm([intent_response, _PRESENTATION_PLAN, _LIST_INTENT, _VIZ_TEXT, _ANSWER_MARKDOWN])
 		state = _base_state("show customers", llm_client=llm)
 
 		graph = get_graph()
@@ -218,7 +219,7 @@ class TestGraphIntegration(FrappeTestCase):
 
 		trace = result["node_trace"]
 		for expected in ["intent_classifier", "memory_loader", "schema_discovery",
-		                 "query_planner", "visualization_planner", "answer_composer",
+		                 "presentation_planner", "query_planner", "visualization_planner", "answer_composer",
 		                 "analytics"]:
 			self.assertIn(expected, trace, f"Expected '{expected}' in node_trace: {trace}")
 		self.assertNotIn("result_formatter", trace, f"Successful path should not hit result_formatter: {trace}")
@@ -226,6 +227,32 @@ class TestGraphIntegration(FrappeTestCase):
 		# Old nodes must not appear
 		for removed in ["sql_generator", "sql_validator", "sql_executor"]:
 			self.assertNotIn(removed, trace, f"Removed node '{removed}' should not be in trace")
+
+	def test_clarification_ready_routes_through_presentation_planner(self):
+		intent_response = '{"intent": "query", "normalized_question": "sales invoice for a period", "reason": "", "clarification_options": []}'
+		clarification_ready = '{"ready": true}'
+		query_intent = '{"mode": "analytics", "primary_doctype": "Sales Invoice", "joins": [], "dimensions": [], "metrics": [{"func": "SUM", "field": "grand_total", "alias": "total_sales"}], "filters": [], "limit": 1}'
+
+		llm = _make_mock_llm([intent_response, clarification_ready, _PRESENTATION_PLAN, query_intent, _VIZ_TEXT, _ANSWER_MARKDOWN])
+		state = _base_state("sales invoice for a period", llm_client=llm)
+		graph = get_graph()
+
+		with patch("internal_bot.bot.nodes.schema_discovery.hybrid_scorer.rank_candidates") as mock_rank, \
+		     patch("internal_bot.bot.nodes.schema_discovery.hybrid_scorer.classify_confidence") as mock_classify, \
+		     patch("internal_bot.bot.nodes.query_planner.query_executor") as mock_qe, \
+		     patch("internal_bot.bot.nodes.query_planner.permission_service") as mock_perm:
+			candidate = ScoredCandidate("Sales Invoice", 1.0, 0.0, 1.0, "test")
+			mock_rank.return_value = [candidate]
+			mock_classify.return_value = ("clear_winner", [candidate])
+			mock_perm.check_doctype_read_access.return_value = True
+			mock_qe.execute_query_intent.return_value = ([{"total_sales": 125000}], None)
+			result = graph.invoke(state)
+
+		trace = result["node_trace"]
+		self.assertIn("clarification_planner", trace)
+		self.assertIn("presentation_planner", trace)
+		self.assertLess(trace.index("clarification_planner"), trace.index("presentation_planner"))
+		self.assertLess(trace.index("presentation_planner"), trace.index("query_planner"))
 
 	# ── Retry logic ───────────────────────────────────────────────────
 
@@ -235,7 +262,7 @@ class TestGraphIntegration(FrappeTestCase):
 		# Non-JSON response: _parse_intent will raise ValueError → triggers retry
 		bad_response = "UPDATE `tabCustomer` SET name = 'x'"
 
-		llm = _make_mock_llm([intent_response] + [bad_response] * 5)
+		llm = _make_mock_llm([intent_response, _PRESENTATION_PLAN] + [bad_response] * 5)
 		state = _base_state("show customers", llm_client=llm)
 
 		graph = get_graph()
@@ -244,13 +271,14 @@ class TestGraphIntegration(FrappeTestCase):
 		response = result["formatted_response"]
 		self.assertEqual(response["status"], "error")
 		self.assertGreaterEqual(result.get("query_generation_attempts", 0), 3)
+		self.assertEqual(result["node_trace"].count("presentation_planner"), 1)
 
 	# ── Debug output ──────────────────────────────────────────────────
 
 	def test_debug_flag_adds_debug_section(self):
 		intent_response = '{"intent": "query", "normalized_question": "show customers", "reason": "", "clarification_options": []}'
 
-		llm = _make_mock_llm([intent_response, _LIST_INTENT, _VIZ_TEXT, _ANSWER_MARKDOWN])
+		llm = _make_mock_llm([intent_response, _PRESENTATION_PLAN, _LIST_INTENT, _VIZ_TEXT, _ANSWER_MARKDOWN])
 		state = _base_state(
 			"show customers",
 			llm_client=llm,
@@ -272,6 +300,9 @@ class TestGraphIntegration(FrappeTestCase):
 		self.assertIn("node_trace", debug)
 		self.assertIn("timing", debug)
 		self.assertIn("cache_hit", debug)
+		self.assertIn("presentation_plan", debug)
+		self.assertIn("pre_query_visualization_preference", debug)
+		self.assertIn("query_shape", debug)
 		self.assertIn("generated_intent", debug)
 		self.assertIn("compiled_sql", debug)
 		self.assertIn("context_window", debug)
@@ -280,7 +311,7 @@ class TestGraphIntegration(FrappeTestCase):
 	def test_debug_context_window_is_omitted_when_setting_disabled(self):
 		intent_response = '{"intent": "query", "normalized_question": "show customers", "reason": "", "clarification_options": []}'
 
-		llm = _make_mock_llm([intent_response, _LIST_INTENT, _VIZ_TEXT, _ANSWER_MARKDOWN])
+		llm = _make_mock_llm([intent_response, _PRESENTATION_PLAN, _LIST_INTENT, _VIZ_TEXT, _ANSWER_MARKDOWN])
 		state = _base_state(
 			"show customers",
 			llm_client=llm,
@@ -303,7 +334,7 @@ class TestGraphIntegration(FrappeTestCase):
 	def test_single_value_query_returns_metric_card_response(self):
 		intent_response = '{"intent": "query", "normalized_question": "show total sales", "reason": "", "clarification_options": []}'
 
-		llm = _make_mock_llm([intent_response, _ANALYTICS_INTENT, _VIZ_BAR, _ANSWER_MARKDOWN])
+		llm = _make_mock_llm([intent_response, _PRESENTATION_PLAN, _ANALYTICS_INTENT, _VIZ_BAR, _ANSWER_MARKDOWN])
 		state = _base_state("show total sales", llm_client=llm)
 
 		graph = get_graph()
@@ -326,7 +357,7 @@ class TestGraphIntegration(FrappeTestCase):
 		intent_response = '{"intent": "query", "normalized_question": "show invoice totals", "reason": "", "clarification_options": []}'
 		query_intent = '{"mode": "list", "doctype": "Sales Invoice", "fields": ["name", "posting_date"], "filters": [], "limit": 10}'
 
-		llm = _make_mock_llm([intent_response, query_intent, query_intent, _VIZ_TEXT, _ANSWER_MARKDOWN])
+		llm = _make_mock_llm([intent_response, _PRESENTATION_PLAN, query_intent, query_intent, _VIZ_TEXT, _ANSWER_MARKDOWN])
 		state = _base_state("show invoice totals", llm_client=llm)
 
 		graph = get_graph()
@@ -346,15 +377,16 @@ class TestGraphIntegration(FrappeTestCase):
 		self.assertGreaterEqual(result.get("query_generation_attempts", 0), 1)
 
 		# Verify that the error context was passed to the retry LLM call
-		last_prompt = llm.chat_completion.call_args_list[2].args[0][1]["content"]
+		last_prompt = llm.chat_completion.call_args_list[3].args[0][1]["content"]
 		self.assertIn("Unknown column", last_prompt)
+		self.assertEqual(result["node_trace"].count("presentation_planner"), 1)
 
 	def test_permission_error_does_not_retry(self):
 		"""PermissionError must force give_up immediately (no retry)."""
 		intent_response = '{"intent": "query", "normalized_question": "show purchase orders", "reason": "", "clarification_options": []}'
 		query_intent = '{"mode": "list", "doctype": "Purchase Order", "fields": ["name"], "filters": [], "limit": 10}'
 
-		llm = _make_mock_llm([intent_response, query_intent])
+		llm = _make_mock_llm([intent_response, _PRESENTATION_PLAN, query_intent])
 		state = _base_state("show purchase orders", llm_client=llm)
 
 		graph = get_graph()
@@ -372,8 +404,8 @@ class TestGraphIntegration(FrappeTestCase):
 		# query_generation_attempts must be MAX_RETRIES (forced give_up, not incremental)
 		from internal_bot.bot.nodes.query_planner import _MAX_RETRIES
 		self.assertEqual(result.get("query_generation_attempts", 0), _MAX_RETRIES)
-		# Only 2 LLM calls: intent parser + 1 planning attempt (no retry)
-		self.assertEqual(llm.chat_completion.call_count, 2)
+		# Only 3 LLM calls: intent parser + presentation planner + 1 query planning attempt (no retry)
+		self.assertEqual(llm.chat_completion.call_count, 3)
 
 	def test_follow_up_analysis_reuses_previous_result_context(self):
 		frappe.get_doc(
@@ -414,7 +446,7 @@ class TestGraphIntegration(FrappeTestCase):
 
 		intent_response = '{"intent": "query", "normalized_question": "analysis this data more", "reason": "", "clarification_options": []}'
 		query_intent = '{"mode": "analytics", "primary_doctype": "Sales Invoice", "joins": [], "dimensions": ["DATE(posting_date)"], "metrics": [{"func": "SUM", "field": "grand_total", "alias": "total_sales"}], "filters": [], "limit": 100}'
-		llm = _make_mock_llm([query_intent, _VIZ_TEXT, _ANSWER_MARKDOWN])
+		llm = _make_mock_llm([_PRESENTATION_PLAN, query_intent, _VIZ_TEXT, _ANSWER_MARKDOWN])
 		state = _base_state("analysis this data more", llm_client=llm)
 
 		graph = get_graph()
@@ -472,7 +504,7 @@ class TestGraphIntegration(FrappeTestCase):
 		frappe.db.commit()
 
 		query_intent = '{"mode": "analytics", "primary_doctype": "Sales Invoice", "joins": [], "dimensions": ["item_code"], "metrics": [{"func": "SUM", "field": "grand_total", "alias": "total_sales"}], "filters": [], "limit": 3}'
-		llm = _make_mock_llm([query_intent, _VIZ_TEXT, _ANSWER_MARKDOWN])
+		llm = _make_mock_llm([_PRESENTATION_PLAN, query_intent, _VIZ_TEXT, _ANSWER_MARKDOWN])
 		state = _base_state("top three items", llm_client=llm)
 
 		graph = get_graph()
@@ -492,7 +524,7 @@ class TestGraphIntegration(FrappeTestCase):
 	def test_arabic_direct_alias_resolves_sales_invoice_without_embeddings(self):
 		self._ensure_alias("Sales Invoice", "فاتورة مبيعات", "ar")
 		intent_response = '{"intent": "query", "normalized_question": "فاتورة مبيعات", "reason": "", "clarification_options": []}'
-		llm = _make_mock_llm([intent_response, _LIST_INTENT, _VIZ_TEXT, _ANSWER_MARKDOWN])
+		llm = _make_mock_llm([intent_response, _PRESENTATION_PLAN, _LIST_INTENT, _VIZ_TEXT, _ANSWER_MARKDOWN])
 		state = _base_state("فاتورة مبيعات", llm_client=llm)
 		graph = get_graph()
 
@@ -510,7 +542,7 @@ class TestGraphIntegration(FrappeTestCase):
 		self._ensure_alias("Sales Invoice", "مبيعات", "ar")
 		intent_response = '{"intent": "query", "normalized_question": "المبيعات بالشهر", "reason": "", "clarification_options": []}'
 		query_intent = '{"mode": "analytics", "primary_doctype": "Sales Invoice", "joins": [], "dimensions": ["MONTH(posting_date)"], "metrics": [{"func": "SUM", "field": "grand_total", "alias": "total_sales"}], "filters": [], "limit": 12}'
-		llm = _make_mock_llm([intent_response, query_intent, _VIZ_TEXT, _ANSWER_MARKDOWN])
+		llm = _make_mock_llm([intent_response, _PRESENTATION_PLAN, query_intent, _VIZ_TEXT, _ANSWER_MARKDOWN])
 		state = _base_state("المبيعات بالشهر", llm_client=llm)
 		graph = get_graph()
 
@@ -527,7 +559,7 @@ class TestGraphIntegration(FrappeTestCase):
 	def test_arabic_indirect_alias_resolves_customer(self):
 		self._ensure_alias("Customer", "عميل", "ar")
 		intent_response = '{"intent": "query", "normalized_question": "كم عميل عندي", "reason": "", "clarification_options": []}'
-		llm = _make_mock_llm([intent_response, _LIST_INTENT, _VIZ_TEXT, _ANSWER_MARKDOWN])
+		llm = _make_mock_llm([intent_response, _PRESENTATION_PLAN, _LIST_INTENT, _VIZ_TEXT, _ANSWER_MARKDOWN])
 		state = _base_state("كم عميل عندي", llm_client=llm)
 		graph = get_graph()
 
@@ -554,6 +586,7 @@ class TestGraphIntegration(FrappeTestCase):
 		self.assertEqual(result["formatted_response"]["status"], "clarification_needed")
 		self.assertIn("Sales Invoice", result["formatted_response"]["options"])
 		self.assertIn("Purchase Invoice", result["formatted_response"]["options"])
+		self.assertNotIn("presentation_planner", result["node_trace"])
 
 	def test_no_match_formatter_uses_ranked_candidates(self):
 		intent_response = '{"intent": "query", "normalized_question": "thing from accounting", "reason": "", "clarification_options": []}'
@@ -572,3 +605,4 @@ class TestGraphIntegration(FrappeTestCase):
 
 		self.assertEqual(result["formatted_response"]["status"], "clarification_needed")
 		self.assertEqual(result["formatted_response"]["options"], ["Journal Entry", "Payment Entry"])
+		self.assertNotIn("presentation_planner", result["node_trace"])

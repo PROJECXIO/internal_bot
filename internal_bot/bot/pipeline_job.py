@@ -15,7 +15,9 @@ import frappe
 from dotenv import load_dotenv
 
 from internal_bot.bot import progress
+from internal_bot.bot import trace
 from internal_bot.bot.graph import get_graph
+from internal_bot.bot.services.language import get_user_profile_language
 from internal_bot.bot.services.llm_client import get_llm_client
 
 # Load env vars (LangSmith etc.) — same as chat.py
@@ -78,21 +80,26 @@ def run_pipeline_job(
         progress.emit_error(_bootstrap_state, user=user)
         return
 
+    current_dt = frappe.utils.get_datetime()
     initial_state = {
         "user": user,
         "raw_message": message.strip(),
         "session_name": session_name,
         "debug": bool(debug),
         "max_rows": settings.max_result_rows or 100,
+        "current_date": str(current_dt.date()),
+        "current_day_name": current_dt.strftime("%A"),
+        "current_year": current_dt.year,
+        "user_profile_language": get_user_profile_language(user),
         "start_time": time.monotonic(),
         "node_trace": [],
         "timing": {},
         "query_generation_attempts": 0,
         "retries": 0,
-        "cache_hit": False,
         "input_tokens": 0,
         "output_tokens": 0,
         "result_row_count": 0,
+        "answer_markdown": "",
         # Async-path flags
         "_emit_progress": True,
         "_job_id": pipeline_job_id,
@@ -102,8 +109,20 @@ def run_pipeline_job(
     }
 
     try:
+        trace.request_start(
+            initial_state,
+            [
+                f'Question: "{message.strip()}"',
+                f"Session: {session_name}",
+                f"Job: {pipeline_job_id}",
+                "Invoking graph...",
+            ],
+        )
         graph = get_graph()
-        final_state = graph.invoke(initial_state)
+        final_state = graph.invoke(
+            initial_state,
+            config=trace.graph_invoke_config(initial_state, run_name="internal_bot.ask_async"),
+        )
         response = final_state.get("formatted_response") or {
             "status": "error",
             "reason": "No response generated.",
@@ -113,6 +132,8 @@ def run_pipeline_job(
 
         _store_result(pipeline_job_id, {"status": "complete", "response": response})
         progress.emit_complete(final_state, response)
+        trace.request_complete(final_state, response)
+        trace.flush_langsmith()
 
     except Exception as exc:
         frappe.log_error(
@@ -127,6 +148,8 @@ def run_pipeline_job(
         }
         _store_result(pipeline_job_id, {"status": "error", "response": error_response})
         progress.emit_error(initial_state, user=user)
+        trace.request_error(initial_state, str(exc))
+        trace.flush_langsmith()
 
 
 def _store_result(job_id: str, result: dict) -> None:

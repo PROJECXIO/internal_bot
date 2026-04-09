@@ -5,21 +5,22 @@ Final node in the pipeline. Always runs.
 Responsibilities:
 1. Save the user message and the assistant response to AI Chat Message
 2. Trigger summary regeneration if threshold exceeded
-3. Save to AI Query Cache (on successful, non-cached queries)
-4. Write an AI Bot Analytics record
+3. Write an AI Bot Analytics record
 """
 import time
 
 import frappe
 
-from internal_bot.bot.services import analytics_service, cache_service, memory as memory_svc
+from internal_bot.bot.services import analytics_service, memory as memory_svc
+from internal_bot.bot.services.formatter import strip_markdown_to_text
 from internal_bot.bot.state import GraphState
-from internal_bot.bot import progress
+from internal_bot.bot import progress, trace
 
 
 def run(state: GraphState) -> dict:
     t0 = time.monotonic()
     node_name = "analytics"
+    log_t0 = trace.node_start(state, node_name)
     if state.get("_emit_progress"):
         progress.emit(state, node_name, "Saving results")
 
@@ -27,6 +28,7 @@ def run(state: GraphState) -> dict:
     session_name = state.get("session_name") or ""
     response = state.get("formatted_response") or {}
     status = response.get("status", "error")
+    trace.detail(state, "Persisting status", status)
 
     # ── 1. Persist chat messages ─────────────────────────────────────
     if session_name:
@@ -56,7 +58,6 @@ def run(state: GraphState) -> dict:
                 discovered_entities=json.dumps(state.get("discovered_doctypes") or []),
                 generated_sql=frappe.as_json(state.get("generated_intent") or {}),
                 validated_sql=state.get("compiled_sql"),
-                cache_hit=1 if state.get("cache_hit") else 0,
                 retries=state.get("query_generation_attempts") or 0,
                 response_time_ms=round(
                     (time.monotonic() - state.get("start_time", t0)) * 1000
@@ -82,46 +83,20 @@ def run(state: GraphState) -> dict:
         threshold = settings.summary_threshold if settings else 20
         if llm_client:
             try:
-                memory_svc.maybe_update_summary(session_name, threshold, llm_client)
+                memory_svc.maybe_update_summary(
+                    session_name,
+                    threshold,
+                    llm_client,
+                    **trace.llm_trace_context(state, node_name, "summarize_memory"),
+                )
             except Exception:
                 pass
     else:
         assistant_msg_name = None
 
-    # ── 3. Save to cache (successful, non-cached queries only) ───────
-    has_result = bool(
-        state.get("compiled_sql") or state.get("validated_intent")
-    )
-    if (
-        status == "success"
-        and not state.get("cache_hit")
-        and has_result
-        and state.get("normalized_question")
-    ):
-        settings = state.get("_settings")
-        ttl = settings.cache_ttl_hours if settings else 24
-        try:
-            query_hash = state.get("_cache_query_hash") or cache_service.make_query_hash(
-                state["normalized_question"], user=user
-            )
-            cache_service.save_query_cache(
-                query_hash=query_hash,
-                normalized_question=state["normalized_question"],
-                sql=state.get("compiled_sql") or frappe.as_json(
-                    state.get("validated_intent") or {}
-                ),
-                result=response,
-                ttl_hours=ttl,
-                user=user,
-            )
-        except Exception:
-            pass
-
-    # ── 4. Write analytics record ────────────────────────────────────
+    # ── 3. Write analytics record ────────────────────────────────────
     event_type = "ask"
-    if state.get("cache_hit"):
-        event_type = "cache_hit"
-    elif status == "blocked":
+    if status == "blocked":
         event_type = "blocked"
     elif status == "error":
         event_type = "error"
@@ -143,12 +118,15 @@ def run(state: GraphState) -> dict:
         sql_executed=state.get("compiled_sql") or "",
         result_row_count=state.get("result_row_count") or 0,
     )
-
-    return _update(state, node_name, t0, {})
+    return _update(state, node_name, t0, {}, log_t0)
 
 
 def _response_to_text(response: dict) -> str:
     """Convert the structured response to a plain-text string for storage."""
+    markdown = strip_markdown_to_text(response.get("markdown") or "")
+    if markdown:
+        return markdown
+
     status = response.get("status", "")
     if status == "success":
         rows = response.get("rows") or []
@@ -163,9 +141,11 @@ def _response_to_text(response: dict) -> str:
         return response.get("reason", "Error.")
 
 
-def _update(state: GraphState, node_name: str, t0: float, updates: dict) -> dict:
+def _update(state: GraphState, node_name: str, t0: float, updates: dict, log_t0: float) -> dict:
     elapsed = round((time.monotonic() - t0) * 1000, 2)
     trace = list(state.get("node_trace") or []) + [node_name]
     timing = dict(state.get("timing") or {})
     timing[node_name] = elapsed
+    from internal_bot.bot import trace as bench_trace
+    bench_trace.node_end(state, node_name, log_t0)
     return {**updates, "node_trace": trace, "timing": timing}

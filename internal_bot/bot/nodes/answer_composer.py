@@ -1,0 +1,586 @@
+"""
+Node: Answer Composer
+
+Creates markdown answer copy after the query result shape and visualization
+choice are already known.
+"""
+import json
+import math
+import re
+import time
+import datetime
+import decimal
+from statistics import median
+
+import frappe
+
+from internal_bot.bot.services.formatter import format_structured_response
+from internal_bot.bot.services.language import (
+	language_name_for_prompt,
+	localize_text,
+)
+from internal_bot.bot.state import GraphState
+from internal_bot.bot import progress, trace
+
+_SYSTEM_PROMPT = """\
+You write concise markdown answers for an ERP analytics assistant.
+
+Rules:
+- Return markdown only.
+- No HTML.
+- No code fences.
+- Use short, direct phrasing.
+- For response_type "plain_text", answer the question directly in markdown.
+- For response_type "metric_card", "bar_chart", "pie_chart", "heatmap_chart", and "table", write a quick brief that fits above the visualization.
+- Prefer one short paragraph, or 2-3 short bullets when that is clearer.
+- Sound like a professional data analyst, not a casual chatbot.
+- Use strong markdown emphasis for important business facts:
+  - Bold important dates like **2026-04-02**.
+  - Bold important numbers and currency values like **229,000** or **$12,500**.
+  - Bold key labels, metric names, and period names like **Grand Total**, **This Month**, and **Last Month**.
+- When comparing periods or categories, make the contrast easy to scan with bullets.
+- Lead with the most important takeaway first.
+- Keep the answer clean and readable, not decorative.
+- Do not mention SQL, internal processing, or implementation details.
+- Do not repeat `answer_prefix` in the markdown.
+- Do not ask clarification or follow-up questions in a success answer. If rows
+  are present, answer from the provided data. Never write phrases like "do you
+  mean", "do you want", "هل تقصد", or "هل تريد" in a success answer.
+- if user ask for dirct answer to a specific question about the data (e.g. "which is the highest", "who is the lowest", "what was it"), give a direct one-line answer naming that item and its value. Do NOT list all items or re-narrate the full dataset.
+- If the response is a category comparison chart, prefer analyst-style observations such as the leader, close runner-up, laggard, spread, or concentration.
+- If this is a follow-up to a previous result AND the question asks for a specific item
+  (e.g. "who is the lowest", "which is the highest", "what was it"), give a direct one-line
+  answer naming that item and its value. Do NOT list all items or re-narrate the full dataset.
+  Example: if asked "who's the lowest?" after a 3-customer chart, answer "**Palmer Productions Ltd.** at **15,000**." — nothing more.
+- If this is a follow-up analysis request (e.g. "analyze", "explain", "break down"),
+  explain the pattern or takeaway behind the numbers in plain markdown prose or bullets.
+  Do not repeat chart instructions or mention visualization.
+- If `analysis_mode` is true, analyze the data instead of just restating it.
+- In `analysis_mode`, focus on business takeaways such as:
+  - concentration or outliers
+  - highest vs lowest values
+  - trend or spread across dates/categories
+  - notable clusters, gaps, or anomalies
+- In `analysis_mode`, avoid row-by-row narration unless the dataset is tiny and that is the clearest way to explain the insight.
+- In `analysis_mode`, prefer 2-4 insight bullets grounded in the data.
+- If the data is too limited for a strong conclusion, say that briefly instead of inventing a pattern.
+- If `row_count` is 1 and the question asks to compare or list multiple items/categories, explicitly note that **only** one result was found for the period (e.g. "**SKU004** is the **only** item with sales this month"). Bold the word **only** to draw attention.
+- Always write the answer in the requested response language.
+
+Examples:
+- Good comparison brief:
+  - **2025-09-16** recorded the highest **Grand Total** at **229,000**.
+  - **This Month** is outperforming **Last Month** on total sales.
+- Good metric answer:
+  - The **Total Sales** value is **125,000**.
+- Good analysis answer:
+  - **2025-09-16** is a clear outlier at **229,000**, contributing more than half of the returned total.
+  - The remaining days are much lower, which suggests sales are concentrated in a small number of peaks rather than distributed evenly.
+"""
+
+
+def run(state: GraphState) -> dict:
+	t0 = time.monotonic()
+	node_name = "answer_composer"
+	log_t0 = trace.node_start(state, node_name)
+	if state.get("_emit_progress"):
+		progress.emit(state, node_name, "Writing answer")
+
+	llm_client = state.get("_llm_client")
+	if not llm_client:
+		return _update(state, node_name, t0, _finalize_success_state(state, {"answer_markdown": ""}), log_t0)
+
+	try:
+		rows = state.get("query_result_rows") or []
+		analysis_mode = _is_analysis_request(state)
+		response_language = state.get("response_language") or state.get("user_profile_language") or "en"
+		preview_response = format_structured_response({**state, "answer_markdown": state.get("answer_markdown") or ""})
+		if not rows:
+			return _update(
+				state,
+				node_name,
+				t0,
+				_finalize_success_state(
+					state,
+					{"answer_markdown": _build_empty_result_markdown(state, preview_response)},
+				),
+				log_t0,
+			)
+		response_type = preview_response.get("response_type")
+		preview_visualization = preview_response.get("visualization") or {}
+		row_limit = _determine_row_limit(
+			row_count=len(rows),
+			response_type=response_type,
+			visualization_kind=preview_visualization.get("kind"),
+			analysis_mode=analysis_mode,
+		)
+		data_rows = _serialize_rows(rows[:row_limit])
+		user_content = json.dumps(
+			{
+				"question": state.get("normalized_question") or state.get("raw_message", ""),
+				"response_language": language_name_for_prompt(response_language),
+				"analysis_mode": analysis_mode,
+				"response_type": response_type,
+				"visualization_kind": preview_visualization.get("kind"),
+				"visualization_layout": preview_visualization.get("layout"),
+				"title": preview_response.get("title") or state.get("normalized_question") or state.get("raw_message", ""),
+				"columns": list(rows[0].keys()) if rows else [],
+				"row_count": len(rows),
+				"data_rows": data_rows,
+				"visualization_choice": state.get("visualization_preference") or "auto",
+				"answer_prefix": state.get("answer_prefix") or "",
+				"summary": preview_response.get("summary") or state.get("summary") or "",
+				"follow_up_to_previous_result": bool(state.get("follow_up_to_previous_result")),
+				"analysis_hints": _build_analysis_hints(rows),
+			},
+			ensure_ascii=True,
+		)
+	except Exception as exc:
+		frappe.log_error(str(exc), "AnswerComposer payload build error")
+		return _update(state, node_name, t0, _finalize_success_state(state, {"answer_markdown": ""}), log_t0)
+
+	messages = [
+		{"role": "system", "content": _SYSTEM_PROMPT},
+		{"role": "user", "content": user_content},
+	]
+
+	try:
+		raw = llm_client.chat_completion(
+			messages,
+			temperature=0.1,
+			max_tokens=220,
+			**trace.llm_trace_context(state, node_name, "compose_answer"),
+		)
+		input_tokens = (state.get("input_tokens") or 0) + (
+			getattr(llm_client, "last_input_tokens", 0) or 0
+		)
+		output_tokens = (state.get("output_tokens") or 0) + (
+			getattr(llm_client, "last_output_tokens", 0) or 0
+		)
+		answer_markdown = _strip_repeated_prefix(
+			_clean_markdown(raw),
+			state.get("answer_prefix") or "",
+		)
+		if _looks_like_clarification_question(answer_markdown) and rows:
+			trace.detail(state, "Answer markdown replaced", "clarification-like success answer")
+			answer_markdown = _build_success_fallback_markdown(state, preview_response, rows)
+		if analysis_mode and not answer_markdown:
+			answer_markdown = _build_analysis_fallback(rows)
+		trace.detail(state, "Answer markdown", answer_markdown[:120] if answer_markdown else "")
+
+		return _update(
+			state,
+			node_name,
+			t0,
+			_finalize_success_state(state, {
+				"answer_markdown": answer_markdown,
+				"input_tokens": input_tokens,
+				"output_tokens": output_tokens,
+				"llm_provider": getattr(llm_client, "provider", ""),
+				"llm_model": getattr(llm_client, "model", ""),
+			}),
+			log_t0,
+		)
+	except Exception as exc:
+		frappe.log_error(str(exc), "AnswerComposer LLM error")
+		return _update(
+			state,
+			node_name,
+			t0,
+			_finalize_success_state(state, {
+				"answer_markdown": _build_analysis_fallback(state.get("query_result_rows") or [])
+				if _is_analysis_request(state) else "",
+				"input_tokens": (state.get("input_tokens") or 0) + (
+					getattr(llm_client, "last_input_tokens", 0) or 0
+				),
+				"output_tokens": (state.get("output_tokens") or 0) + (
+					getattr(llm_client, "last_output_tokens", 0) or 0
+				),
+				"llm_provider": getattr(llm_client, "provider", ""),
+				"llm_model": getattr(llm_client, "model", ""),
+			}),
+			log_t0,
+		)
+
+
+def _clean_markdown(raw: str) -> str:
+	text = (raw or "").strip()
+	if not text:
+		return ""
+
+	match = re.search(r"```(?:markdown)?\s*([\s\S]*?)```", text, re.IGNORECASE)
+	if match:
+		text = match.group(1).strip()
+
+	return text
+
+
+def _strip_repeated_prefix(markdown: str, answer_prefix: str) -> str:
+	text = (markdown or "").strip()
+	prefix = (answer_prefix or "").strip()
+	if not text or not prefix:
+		return text
+
+	normalized_prefix = re.sub(r"[\s:.-]+$", "", prefix).lower()
+	for candidate in (text, re.sub(r"^#+\s*", "", text, count=1).strip()):
+		normalized_candidate = re.sub(r"[\s:.-]+$", "", candidate).lower()
+		if normalized_candidate.startswith(normalized_prefix):
+			remainder = candidate[len(prefix):].lstrip(" :\n")
+			return remainder or text
+
+	return text
+
+
+_CLARIFICATION_QUESTION_RE = re.compile(
+	r"\b(do you mean|did you mean|do you want|would you like|should i|can you clarify|could you clarify)\b|هل\s+(?:تقصد|تريد)|أتعني|هل\s+يمكنك\s+توضيح",
+	re.IGNORECASE,
+)
+
+
+def _looks_like_clarification_question(markdown: str) -> bool:
+	text = (markdown or "").strip()
+	if not text:
+		return False
+	if not _CLARIFICATION_QUESTION_RE.search(text):
+		return False
+	return "?" in text or "؟" in text
+
+
+def _build_success_fallback_markdown(state: GraphState, preview_response: dict, rows: list[dict]) -> str:
+	response_language = state.get("response_language") or state.get("user_profile_language") or "en"
+	columns = list(rows[0].keys()) if rows else []
+
+	if len(rows) == 1 and columns:
+		parts = []
+		for column in columns[:4]:
+			value = rows[0].get(column)
+			if value in (None, ""):
+				continue
+			label = _humanize_column_label(column, response_language)
+			parts.append(f"**{label}**: **{_format_result_value(value)}**")
+		if parts:
+			if response_language == "ar":
+				return "النتيجة: " + "، ".join(parts) + "."
+			return "Result: " + ", ".join(parts) + "."
+
+	summary = (preview_response.get("summary") or "").strip()
+	if response_language != "ar" and summary:
+		return summary
+	if response_language == "ar":
+		return f"تم العثور على **{len(rows)}** نتائج. راجع الرسم أو الجدول للتفاصيل."
+	return f"Found **{len(rows)}** results."
+
+
+def _humanize_column_label(column: str, response_language: str) -> str:
+	label = (column or "").strip()
+	if response_language == "ar":
+		arabic_labels = {
+			"total_sales": "إجمالي المبيعات",
+			"grand_total": "الإجمالي",
+			"record_count": "عدد السجلات",
+			"count": "العدد",
+			"customer": "العميل",
+			"customer_name": "اسم العميل",
+		}
+		return arabic_labels.get(label, label.replace("_", " "))
+	return label.replace("_", " ").title()
+
+
+def _format_result_value(value) -> str:
+	if _is_numeric_value(value):
+		return _format_number(value)
+	if isinstance(value, (datetime.date, datetime.datetime)):
+		return str(value)
+	return str(value)
+
+
+def _is_analysis_request(state: GraphState) -> bool:
+	question = (state.get("normalized_question") or state.get("raw_message") or "").lower()
+	if not question:
+		return False
+
+	return any(
+		re.search(pattern, question)
+		for pattern in (
+			r"\banaly[sz]e\b",
+			r"\banalysis\b",
+			r"\bexplain\b",
+			r"\binterpret\b",
+			r"\bbreak down\b",
+			r"\bdeeper\b",
+			r"\bfurther\b",
+			r"\binsight(s)?\b",
+			r"\bwhat does this mean\b",
+		)
+	)
+
+
+def _serialize_rows(rows: list[dict]) -> list[dict]:
+	result = []
+	for row in rows:
+		clean = {}
+		for key, value in row.items():
+			if isinstance(value, decimal.Decimal):
+				float_value = float(value)
+				clean[key] = float_value if math.isfinite(float_value) else str(value)
+			elif isinstance(value, (datetime.date, datetime.datetime)):
+				clean[key] = str(value)
+			elif value is None:
+				clean[key] = None
+			else:
+				clean[key] = value
+		result.append(clean)
+	return result
+
+
+def _determine_row_limit(
+	row_count: int,
+	response_type: str | None,
+	visualization_kind: str | None,
+	analysis_mode: bool,
+) -> int:
+	if analysis_mode:
+		return min(row_count, 25)
+	if response_type == "heatmap_chart":
+		return min(row_count, 50)
+	if visualization_kind == "grouped_bar":
+		return min(row_count, 25)
+	if response_type in {"bar_chart", "pie_chart", "table"}:
+		return min(row_count, 8)
+	return min(row_count, 3)
+
+
+def _build_analysis_hints(rows: list[dict]) -> dict:
+	if not rows:
+		return {}
+
+	columns = list(rows[0].keys())
+	if len(columns) == 3:
+		return _build_grouped_analysis_hints(rows, columns)
+	if len(columns) != 2:
+		return {}
+
+	value_column = next((column for column in columns if _is_numeric_column(rows, column)), None)
+	if not value_column:
+		return {}
+
+	label_column = next((column for column in columns if column != value_column), None)
+	if not label_column:
+		return {}
+
+	values = [float(row.get(value_column)) for row in rows if _is_numeric_value(row.get(value_column))]
+	if len(values) < 2:
+		return {}
+
+	max_row = max(rows, key=lambda row: float(row.get(value_column) or 0))
+	min_row = min(rows, key=lambda row: float(row.get(value_column) or 0))
+	total = sum(values)
+	mean = total / len(values)
+	median_value = median(values)
+	top_share = round((float(max_row.get(value_column) or 0) / total) * 100, 1) if total else 0
+
+	return {
+		"label_column": label_column,
+		"value_column": value_column,
+		"total": round(total, 2),
+		"average": round(mean, 2),
+		"median": round(median_value, 2),
+		"max_label": max_row.get(label_column),
+		"max_value": max_row.get(value_column),
+		"min_label": min_row.get(label_column),
+		"min_value": min_row.get(value_column),
+		"top_share_percent": top_share,
+	}
+
+
+def _build_grouped_analysis_hints(rows: list[dict], columns: list[str]) -> dict:
+	value_column = next((column for column in columns if _is_numeric_column(rows, column)), None)
+	if not value_column:
+		return {}
+
+	dimension_columns = [column for column in columns if column != value_column]
+	if len(dimension_columns) != 2:
+		return {}
+
+	label_column, series_column = _pick_grouped_hint_keys(rows, dimension_columns)
+	values = [float(row.get(value_column)) for row in rows if _is_numeric_value(row.get(value_column))]
+	if len(values) < 2:
+		return {}
+
+	max_row = max(rows, key=lambda row: float(row.get(value_column) or 0))
+	min_row = min(rows, key=lambda row: float(row.get(value_column) or 0))
+	total = sum(values)
+	mean = total / len(values)
+	median_value = median(values)
+	top_share = round((float(max_row.get(value_column) or 0) / total) * 100, 1) if total else 0
+
+	category_totals: dict[str, float] = {}
+	series_totals: dict[str, float] = {}
+	for row in rows:
+		category_label = row.get(label_column)
+		series_label = row.get(series_column)
+		value = row.get(value_column)
+		if category_label in (None, "") or series_label in (None, "") or not _is_numeric_value(value):
+			continue
+
+		category_key = str(category_label)
+		series_key = str(series_label)
+		value_number = float(value)
+		category_totals[category_key] = category_totals.get(category_key, 0.0) + value_number
+		series_totals[series_key] = series_totals.get(series_key, 0.0) + value_number
+
+	top_category = max(category_totals.items(), key=lambda item: item[1]) if category_totals else None
+	top_series = max(series_totals.items(), key=lambda item: item[1]) if series_totals else None
+
+	return {
+		"shape": "grouped_long_form",
+		"label_column": label_column,
+		"series_column": series_column,
+		"value_column": value_column,
+		"total": round(total, 2),
+		"average": round(mean, 2),
+		"median": round(median_value, 2),
+		"max_label": max_row.get(label_column),
+		"max_series": max_row.get(series_column),
+		"max_value": max_row.get(value_column),
+		"min_label": min_row.get(label_column),
+		"min_series": min_row.get(series_column),
+		"min_value": min_row.get(value_column),
+		"top_share_percent": top_share,
+		"top_category_label": top_category[0] if top_category else None,
+		"top_category_total": round(top_category[1], 2) if top_category else None,
+		"top_series_label": top_series[0] if top_series else None,
+		"top_series_total": round(top_series[1], 2) if top_series else None,
+	}
+
+
+def _pick_grouped_hint_keys(rows: list[dict], dimension_columns: list[str]) -> tuple[str, str]:
+	date_key = next((column for column in dimension_columns if _is_date_like_column(rows, column)), None)
+	if date_key:
+		other_key = next(column for column in dimension_columns if column != date_key)
+		return date_key, other_key
+	return dimension_columns[0], dimension_columns[1]
+
+
+def _build_analysis_fallback(rows: list[dict]) -> str:
+	hints = _build_analysis_hints(rows)
+	if not hints:
+		return ""
+
+	value_column = hints["value_column"].replace("_", " ")
+	max_value = _format_number(hints["max_value"])
+	min_value = _format_number(hints["min_value"])
+	total = _format_number(hints["total"])
+	average = _format_number(hints["average"])
+	median_value = _format_number(hints["median"])
+
+	lines = [
+		f"- **{hints['max_label']}** is the highest point at **{max_value}** for **{value_column}**.",
+		f"- The returned total is **{total}**, with an average of **{average}** and a median of **{median_value}**, which helps show whether the result is evenly distributed or skewed.",
+	]
+
+	if hints["top_share_percent"] >= 35:
+		lines.append(
+			f"- **{hints['max_label']}** alone contributes about **{hints['top_share_percent']}%** of the returned total, so the pattern is concentrated rather than evenly spread."
+		)
+	else:
+		lines.append(
+			f"- The lowest point is **{hints['min_label']}** at **{min_value}**, which gives a useful contrast against the peak."
+		)
+
+	min_frequency = _count_numeric_value(rows, hints["value_column"], hints["min_value"])
+	if min_frequency > 1:
+		lines.append(
+			f"- The low end repeats: **{min_value}** appears **{min_frequency}** times, which suggests a cluster of weaker periods rather than a single isolated dip."
+		)
+
+	return "\n".join(lines[:4])
+
+
+def _is_numeric_column(rows: list[dict], column: str) -> bool:
+	values = [row.get(column) for row in rows if row.get(column) not in (None, "")]
+	if not values:
+		return False
+	return all(_is_numeric_value(value) for value in values)
+
+
+def _is_numeric_value(value) -> bool:
+	return isinstance(value, (int, float, decimal.Decimal)) and not isinstance(value, bool)
+
+
+def _count_numeric_value(rows: list[dict], column: str, target) -> int:
+	try:
+		target_number = float(target)
+	except (TypeError, ValueError):
+		return 0
+
+	count = 0
+	for row in rows:
+		value = row.get(column)
+		if _is_numeric_value(value) and float(value) == target_number:
+			count += 1
+	return count
+
+
+def _is_date_like_column(rows: list[dict], column: str) -> bool:
+	column_name = (column or "").lower()
+	if "date" in column_name:
+		return True
+
+	pattern = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+	values = [row.get(column) for row in rows if row.get(column) not in (None, "")]
+	return bool(values) and all(isinstance(value, str) and pattern.match(value) for value in values)
+
+
+def _format_number(value) -> str:
+	if not _is_numeric_value(value):
+		return str(value)
+
+	number = float(value)
+	if number.is_integer():
+		return f"{int(number):,}"
+
+	return f"{number:,.2f}".rstrip("0").rstrip(".")
+
+
+def _build_empty_result_markdown(state: GraphState, preview_response: dict) -> str:
+	prefix = (state.get("answer_prefix") or "").strip()
+	if prefix:
+		return re.sub(r"[\s:.-]+$", "", prefix)
+
+	summary = (preview_response.get("summary") or "").strip()
+	if summary:
+		return summary
+
+	return localize_text(
+		"I couldn't find any matching data for that request.",
+		state.get("response_language") or state.get("user_profile_language") or "en",
+		llm_client=state.get("_llm_client"),
+	)[0]
+
+
+def _finalize_success_state(state: GraphState, updates: dict) -> dict:
+	merged_state = {**state, **updates}
+	formatted = format_structured_response(merged_state)
+	return {
+		**updates,
+		"formatted_response": formatted,
+		"response_type": formatted.get("response_type"),
+		"visualization": formatted.get("visualization"),
+		"summary": formatted.get("summary"),
+		"answer_prefix": formatted.get("answer_prefix", ""),
+		"answer_markdown": formatted.get("markdown", updates.get("answer_markdown", "")),
+		"visualization_preference": merged_state.get("visualization_preference") or "auto",
+	}
+
+
+def _update(state: GraphState, node_name: str, t0: float, updates: dict, log_t0: float) -> dict:
+	elapsed = round((time.monotonic() - t0) * 1000, 2)
+	node_trace = list(state.get("node_trace") or []) + [node_name]
+	timing = dict(state.get("timing") or {})
+	timing[node_name] = elapsed
+	from internal_bot.bot import trace as bench_trace
+	bench_trace.node_end(state, node_name, log_t0)
+	updated_state = {**updates, "node_trace": node_trace, "timing": timing}
+
+	return updated_state

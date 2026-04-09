@@ -34,6 +34,11 @@ _EXCLUDE_FIELD_TYPES = frozenset({
     "Heading", "HTML Editor",
 })
 
+# Standard Frappe system fields present on every DocType table.
+# They are NOT returned by frappe.get_meta().fields, so we add them explicitly.
+# All are readable by anyone with DocType read access.
+_STANDARD_READ_FIELDS = frozenset({"docstatus", "creation", "modified", "owner"})
+
 
 def check_doctype_read_access(doctype: str, user: str) -> bool:
     """
@@ -43,7 +48,7 @@ def check_doctype_read_access(doctype: str, user: str) -> bool:
     """
     if doctype in _ALWAYS_BLOCKED:
         return False
-    return bool(frappe.has_permission(doctype, ptype="read", user=user, raise_exception=False))
+    return bool(frappe.has_permission(doctype, ptype="read", user=user, throw=False))
 
 
 def filter_permitted_doctypes(doctypes: list[str], user: str) -> list[str]:
@@ -78,12 +83,16 @@ def get_permitted_field_names(doctype: str, user: str) -> list[str]:
         )
         accessible_permlevels.update(high_perm_records)
 
-    return [
+    result = [
         f.fieldname
         for f in meta.fields
         if f.fieldtype not in _EXCLUDE_FIELD_TYPES
         and (f.permlevel or 0) in accessible_permlevels
     ]
+    # Standard system fields are always accessible with read permission
+    result_set = set(result)
+    result.extend(f for f in _STANDARD_READ_FIELDS if f not in result_set)
+    return result
 
 
 def assert_fields_permitted(doctype: str, fieldnames: list[str], user: str) -> list[str]:
@@ -91,11 +100,31 @@ def assert_fields_permitted(doctype: str, fieldnames: list[str], user: str) -> l
     Return only the fieldnames the user is permitted to read.
     Silently drops disallowed fields.
     Raises frappe.PermissionError if no permitted fields remain after filtering.
+
+    Child-table prefixed fields (e.g. "Sales Invoice Item.item_code") are validated
+    against the child DocType's permitted fields.
     """
     permitted = set(get_permitted_field_names(doctype, user))
     permitted.add("name")  # primary key is always accessible
 
-    filtered = [fn for fn in fieldnames if fn in permitted]
+    # Cache child-table permitted fields to avoid repeated lookups
+    _child_permitted_cache: dict[str, set[str]] = {}
+
+    filtered = []
+    for fn in fieldnames:
+        if "." in fn:
+            # Child-table prefixed field: "Child DocType.fieldname"
+            child_dt, child_field = fn.split(".", 1)
+            if child_dt not in _child_permitted_cache:
+                try:
+                    _child_permitted_cache[child_dt] = set(get_permitted_field_names(child_dt, user))
+                    _child_permitted_cache[child_dt].add("name")
+                except Exception:
+                    _child_permitted_cache[child_dt] = set()
+            if child_field in _child_permitted_cache[child_dt]:
+                filtered.append(fn)
+        elif fn in permitted:
+            filtered.append(fn)
 
     if not filtered:
         frappe.throw(

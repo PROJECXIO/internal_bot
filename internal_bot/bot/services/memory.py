@@ -1,4 +1,5 @@
 import json
+import re
 from typing import TYPE_CHECKING
 
 import frappe
@@ -8,6 +9,16 @@ if TYPE_CHECKING:
 	from internal_bot.bot.services.llm_client import LLMClient
 
 
+_FOLLOW_UP_PATTERNS = (
+	r"\b(analy[sz]e|analysis|explain|interpret|summari[sz]e|break down)\b",
+	r"\b(this|that|these|those)\s+(data|result|results|chart|table|numbers)\b",
+	r"\b(more|further|deeper)\b",
+)
+_CONTEXT_ROW_LIMIT = 5
+_CONTEXT_TEXT_LIMIT = 600
+_MESSAGE_CONTENT_LIMIT = 1000
+
+
 def load_chat_memory(session_name: str, window_size: int) -> dict:
 	"""Return last N messages and the current rolling summary for the session."""
 	session = frappe.get_doc("AI Chat Session", session_name)
@@ -15,16 +26,60 @@ def load_chat_memory(session_name: str, window_size: int) -> dict:
 	recent_messages = frappe.get_all(
 		"AI Chat Message",
 		filters={"session": session_name, "role": ["in", ["user", "assistant"]]},
-		fields=["role", "content", "creation"],
+		fields=["role", "content", "creation", "structured_response", "discovered_entities", "normalized_question"],
 		order_by="creation desc",
 		limit=window_size,
 	)
 	messages = list(reversed(recent_messages))
+	last_user_question = ""
+	last_non_follow_up_user_question = ""
+	last_assistant_response = {}
+	last_assistant_context_text = ""
+	last_discovered_doctypes = []
+
+	for msg in reversed(messages):
+		if msg.role == "assistant":
+			if not last_assistant_response:
+				if msg.structured_response:
+					try:
+						last_assistant_response = frappe.parse_json(msg.structured_response) or {}
+					except Exception:
+						last_assistant_response = {}
+				last_assistant_context_text = _build_response_context_text(last_assistant_response)
+			if not last_discovered_doctypes and msg.discovered_entities:
+				try:
+					last_discovered_doctypes = frappe.parse_json(msg.discovered_entities) or []
+				except Exception:
+					last_discovered_doctypes = []
+		elif msg.role == "user" and not last_user_question:
+			last_user_question = msg.normalized_question or msg.content or ""
+		if msg.role == "user" and not last_non_follow_up_user_question:
+			candidate = msg.normalized_question or msg.content or ""
+			if candidate and not _looks_like_follow_up(candidate):
+				last_non_follow_up_user_question = candidate
+
+	enriched_messages = []
+	for m in messages:
+		content = m.content or ""
+		if m.role == "assistant" and m.structured_response and not content:
+			try:
+				resp = frappe.parse_json(m.structured_response) or {}
+			except Exception:
+				resp = {}
+			data_summary = _build_response_context_text(resp)
+			if data_summary:
+				content = data_summary
+		enriched_messages.append({"role": m.role, "content": _truncate_context_text(content, _MESSAGE_CONTENT_LIMIT)})
 
 	return {
-		"messages": [{"role": m.role, "content": m.content} for m in messages],
+		"messages": enriched_messages,
 		"summary": session.memory_summary or "",
 		"total_messages": session.total_messages or 0,
+		"last_user_question": last_user_question,
+		"last_non_follow_up_user_question": last_non_follow_up_user_question or last_user_question,
+		"last_assistant_response": last_assistant_response,
+		"last_assistant_context_text": last_assistant_context_text,
+		"last_discovered_doctypes": last_discovered_doctypes,
 	}
 
 
@@ -74,7 +129,13 @@ def save_message(
 	return msg.name
 
 
-def maybe_update_summary(session_name: str, threshold: int, llm_client: "LLMClient") -> bool:
+def maybe_update_summary(
+	session_name: str,
+	threshold: int,
+	llm_client: "LLMClient",
+	trace_metadata: dict | None = None,
+	trace_tags: list[str] | None = None,
+) -> bool:
 	"""
 	Re-generate the rolling summary if total_messages >= threshold and enough
 	messages have accumulated since the last summary.
@@ -129,7 +190,13 @@ def maybe_update_summary(session_name: str, threshold: int, llm_client: "LLMClie
 		},
 	]
 
-	new_summary = llm_client.chat_completion(prompt_messages, temperature=0.0, max_tokens=500)
+	new_summary = llm_client.chat_completion(
+		prompt_messages,
+		temperature=0.0,
+		max_tokens=500,
+		trace_metadata=trace_metadata,
+		trace_tags=trace_tags,
+	)
 
 	frappe.db.set_value(
 		"AI Chat Session",
@@ -140,3 +207,45 @@ def maybe_update_summary(session_name: str, threshold: int, llm_client: "LLMClie
 		},
 	)
 	return True
+
+
+def _looks_like_follow_up(text: str) -> bool:
+	normalized = re.sub(r"\s+", " ", (text or "").lower()).strip()
+	return any(re.search(pattern, normalized) for pattern in _FOLLOW_UP_PATTERNS)
+
+
+def _build_response_context_text(response: dict) -> str:
+	if not response:
+		return ""
+
+	parts = []
+	title = response.get("title")
+	if title:
+		parts.append(f"Title: {title}")
+
+	summary = response.get("summary")
+	if summary:
+		parts.append(f"Summary: {summary}")
+
+	columns = response.get("columns") or []
+	if columns:
+		parts.append(f"Columns: {columns}")
+
+	rows = response.get("rows") or []
+	if rows:
+		parts.append(f"Rows (up to {_CONTEXT_ROW_LIMIT}): {rows[:_CONTEXT_ROW_LIMIT]}")
+
+	markdown = response.get("markdown")
+	if markdown:
+		parts.append(f"Narrative: {_truncate_context_text(markdown)}")
+
+	return "\n".join(parts)
+
+
+def _truncate_context_text(value: str, limit: int = _CONTEXT_TEXT_LIMIT) -> str:
+	if not value:
+		return ""
+	text = re.sub(r"\s+", " ", value).strip()
+	if len(text) <= limit:
+		return text
+	return text[: limit - 1].rstrip() + "…"

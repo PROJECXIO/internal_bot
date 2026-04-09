@@ -7,6 +7,7 @@ that the backend compiles into a permission-safe query.
 generate_query_intent() — calls the LLM and returns a validated JSON dict
 validate_sql()          — kept for defense-in-depth checks (analytics SQL)
 """
+import datetime
 import json
 import re
 from typing import TYPE_CHECKING
@@ -50,8 +51,11 @@ Examples: "show me open sales orders", "list customers added this week"
 }
 
 ### Mode "analytics"
-Use when the question requires aggregation: totals, counts, averages, or GROUP BY.
-Examples: "total sales by customer this month", "how many invoices submitted today"
+Use when the question requires aggregation (totals, counts, averages, GROUP BY) OR
+when the question needs data from child tables (e.g. Sales Invoice Item, Purchase
+Order Item). frappe.get_list() (list mode) cannot access child table fields.
+Examples: "total sales by customer this month", "how many invoices submitted today",
+"show me the items in this invoice", "what did the customer buy"
 
 {
   "mode": "analytics",
@@ -71,7 +75,9 @@ Examples: "total sales by customer this month", "how many invoices submitted tod
   "filters": [["fieldname", "operator", "value"]],
   "date_range": {
     "field": "fieldname",
-    "preset": "this_month"
+    "preset": "this_month",
+    "from_date": "YYYY-MM-DD",
+    "to_date": "YYYY-MM-DD"
   },
   "order_by": "total_amount desc",
   "limit": 20
@@ -84,12 +90,81 @@ Examples: "total sales by customer this month", "how many invoices submitted tod
 3. Field names must match exactly (snake_case as shown in schema).
 4. Allowed filter operators: =, !=, >, <, >=, <=, like, in, not in, between, is
 5. Allowed aggregate functions: SUM, COUNT, AVG, MAX, MIN, COUNT_DISTINCT
-6. Allowed date presets: today, yesterday, this_week, this_month, last_month, \
-this_year, last_30_days
+6. Allowed date presets (use ONLY inside date_range.preset): today, yesterday, \
+this_week, this_month, last_month, this_year, last_30_days
 7. limit must be ≤ 100.
 8. joins list may be empty [].
 9. date_range may be omitted entirely.
 10. Output JSON only — no explanation, no SQL, no Markdown fences.
+11. For submittable DocTypes (Sales Invoice, Purchase Invoice, Purchase Order, \
+Sales Order, Stock Entry, Payment Entry, Journal Entry, Delivery Note, \
+Purchase Receipt, etc.) ALWAYS add ["docstatus", "=", 1] to filters to \
+include only submitted/confirmed records. The "docstatus" field is always \
+available in the schema.
+12. NEVER put date preset names (today, this_year, this_month, etc.) as values \
+inside the filters array. Date presets belong ONLY in date_range.preset. \
+For date filtering always use date_range, never a filter with a preset string.
+13. Do NOT add date_range unless the user explicitly mentions a time period \
+(e.g. "this month", "last year", "today", "in 2024"). If no period is \
+mentioned, omit date_range entirely.
+14. Do NOT add dimensions unless the user explicitly asks for a breakdown or \
+grouping (e.g. "by customer", "per month", "grouped by"). For a plain \
+total or count with no grouping requested, leave dimensions as [].
+15. When the question starts with "total" or "count" followed by a DocType name \
+(e.g. "total sales invoice", "count purchase orders"), ALWAYS use analytics \
+mode. "Total" means the user wants an aggregate number, not a list of records. \
+Use COUNT(*) if the question does not specify a numeric field, or SUM(field) \
+if a specific amount field is implied.
+16. For time-based grouping ("per year", "per month", "per day", "per week"), \
+use date extraction functions in dimensions: YEAR(fieldname), MONTH(fieldname), \
+YEAR_MONTH(fieldname), DAY(fieldname), DATE(fieldname), WEEK(fieldname). The inner field must be a \
+valid date field from the schema (e.g. "per year" → "YEAR(posting_date)"). \
+For monthly grouping across open-ended or multi-year data, prefer YEAR_MONTH(fieldname) \
+so months from different years stay separate.
+17. NEVER include SQL table names, backticks, or SQL expressions like \
+`tabSales Invoice`.grand_total in fields, dimensions, filters, or date_range.field. \
+For the primary DocType, use plain field names: "grand_total", "customer", "posting_date". \
+NEVER prefix primary DocType fields with the DocType name (wrong: "Sales Invoice.grand_total"). \
+NEVER reference DocTypes that are not the primary or in the joins list (wrong: "Customer.customer_name").
+18. For ERPNext child tables (like Sales Invoice Item), if you need line-item data, \
+add a join with {"child_doctype": "...", "parent_link_field": "parent", "join_type": "LEFT"}. \
+NEVER use a child table as the primary_doctype/doctype — always use the parent DocType \
+(e.g. "Sales Invoice") and JOIN the child table. ONLY child-table fields need a DocType \
+prefix (e.g. "Sales Invoice Item.item_code", "Sales Invoice Item.qty"). \
+Primary DocType fields must always be plain names without prefix.
+19. CRITICAL: Child table fields and JOINs are ONLY valid in "analytics" mode. \
+NEVER use "list" mode when you need to access child table fields (item_code, qty, amount, \
+item_name, or any field from a child DocType). If the query requires any child table field, \
+you MUST use "analytics" mode. \
+For a FLAT ITEM LISTING (e.g. "show me the items in this invoice", "what did they buy"): \
+use analytics mode with dimensions = [child table fields] and metrics = [] (empty). \
+This returns each row as-is without grouping. \
+For AGGREGATION (e.g. "total sales per item"): use analytics mode with both dimensions and metrics. \
+frappe.get_list() cannot handle child table field prefixes — using "list" mode with \
+child table fields will cause a runtime error.
+20. Child-table link fields "parent", "parenttype", and "parentfield" are valid even \
+if they are not shown in the schema table.
+21. In "list" mode, ALL filter field names must be plain parent DocType field names \
+(e.g. "customer", "posting_date"). NEVER use dotted notation like "items.item_code" \
+or "Sales Invoice Item.item_code" as a filter field in list mode — this will silently \
+return wrong results. If you need to filter by a child table field, use "analytics" mode.
+22. The ## Presentation Plan (Advisory) section, when present, is only a planning hint. \
+The user's question and available schema override it. Never use fields or DocTypes that \
+are not present in the schema context. If the plan says metric/card, prefer one aggregate \
+with no dimensions unless the user explicitly asks for a grouping such as "by", "per", \
+"each", "breakdown", or "grouped". Ignore dimension_hints for metric/card plans; those \
+hints may identify business context, not GROUP BY fields. If it says time_series/line/area, \
+include a date or time dimension and a metric when the schema supports it. If it says \
+category_comparison/bar, include one category dimension and one metric. If it says \
+composition/donut/pie, produce category plus metric data with a small limit. If it says \
+stacked_composition/stacked_bar, use two dimensions plus one metric only when the user \
+asks for a two-level breakdown. If it says matrix/heatmap, use two categorical dimensions \
+plus one metric when the schema supports it. For item/SKU/product movement or sales per customer, \
+including Arabic phrasing like "حركة الاصناف عند كل عميل", prefer two dimensions \
+(customer + item/SKU/product) plus one metric when the schema supports it, but do not \
+override the user's explicit request. \
+If it says record_list/lookup/table/text, do not force \
+aggregation.
 """
 
 
@@ -98,8 +173,14 @@ def generate_query_intent(
     schema_context: str,
     memory_context: str,
     llm_client: "LLMClient",
+    current_date: str | None = None,
+    current_day_name: str | None = None,
+    current_year: int | None = None,
+    presentation_plan: dict | None = None,
     attempt: int = 0,
     previous_error: str | None = None,
+    trace_metadata: dict | None = None,
+    trace_tags: list[str] | None = None,
 ) -> dict:
     """
     Call the LLM and return a validated JSON query intent dict.
@@ -120,6 +201,17 @@ def generate_query_intent(
     if schema_context:
         user_parts.append(f"## Available Schema\n{schema_context}\n")
 
+    resolved_date = current_date or frappe.utils.nowdate()
+    resolved_year = current_year or datetime.date.today().year
+    resolved_day_name = current_day_name or frappe.utils.get_datetime().strftime("%A")
+    user_parts.append(f"## Current Date\n{resolved_date}")
+    user_parts.append(f"## Current Day\n{resolved_day_name}")
+    user_parts.append(f"## Current Year\n{resolved_year}")
+    if presentation_plan:
+        user_parts.append(
+            "## Presentation Plan (Advisory)\n"
+            f"{json.dumps(_compact_presentation_plan(presentation_plan), ensure_ascii=True)}"
+        )
     user_parts.append(f"## Question\n{question}")
 
     if attempt > 0 and previous_error:
@@ -134,8 +226,50 @@ def generate_query_intent(
         {"role": "user", "content": "\n".join(user_parts)},
     ]
 
-    raw = llm_client.chat_completion(messages)
-    return _parse_intent(raw)
+    raw = llm_client.chat_completion(
+        messages,
+        trace_metadata=trace_metadata,
+        trace_tags=trace_tags,
+    )
+    intent = _parse_intent(raw)
+    return _apply_presentation_plan_to_intent(intent, presentation_plan, question)
+
+
+def _compact_presentation_plan(plan: dict) -> dict:
+    if not isinstance(plan, dict):
+        return {}
+    allowed_keys = (
+        "visualization",
+        "query_shape",
+        "dimension_hints",
+        "metric_hints",
+        "limit_hint",
+        "reason",
+    )
+    return {key: plan.get(key) for key in allowed_keys if plan.get(key) not in (None, "", [])}
+
+
+def _apply_presentation_plan_to_intent(
+    intent: dict,
+    presentation_plan: dict | None,
+    question: str,
+) -> dict:
+    """Apply narrow, safe shape constraints from the advisory presentation plan."""
+    if not isinstance(presentation_plan, dict):
+        return intent
+
+    visualization = str(presentation_plan.get("visualization") or "").lower()
+    query_shape = str(presentation_plan.get("query_shape") or "").lower()
+    if visualization != "card" and query_shape != "metric":
+        return intent
+    if _question_requests_grouping(question):
+        return intent
+    if intent.get("mode") != "analytics" or not intent.get("dimensions"):
+        return intent
+
+    normalized_intent = dict(intent)
+    normalized_intent["dimensions"] = []
+    return normalized_intent
 
 
 def _parse_intent(raw: str) -> dict:
@@ -145,9 +279,18 @@ def _parse_intent(raw: str) -> dict:
     try:
         data = json.loads(cleaned)
     except json.JSONDecodeError as exc:
-        raise ValueError(
-            f"LLM response was not valid JSON: {exc}\nRaw response: {raw!r}"
-        ) from exc
+        repaired = _repair_json_like_string(cleaned)
+        if repaired != cleaned:
+            try:
+                data = json.loads(repaired)
+            except json.JSONDecodeError:
+                raise ValueError(
+                    f"LLM response was not valid JSON: {exc}\nRaw response: {raw!r}"
+                ) from exc
+        else:
+            raise ValueError(
+                f"LLM response was not valid JSON: {exc}\nRaw response: {raw!r}"
+            ) from exc
 
     if not isinstance(data, dict):
         raise ValueError(f"Expected a JSON object, got {type(data).__name__}. Raw: {raw!r}")
@@ -164,11 +307,11 @@ def _parse_intent(raw: str) -> dict:
     if mode == "analytics" and not data.get("primary_doctype"):
         raise ValueError(f"Analytics intent missing 'primary_doctype'. Raw: {raw!r}")
 
-    if mode == "analytics" and not data.get("metrics"):
-        raise ValueError(f"Analytics intent missing 'metrics'. Raw: {raw!r}")
+    # metrics may be empty [] for flat child-table listing (no aggregation)
+    if mode == "analytics" and data.get("metrics") is None:
+        raise ValueError(f"Analytics intent missing 'metrics' key. Raw: {raw!r}")
 
-    return data
-
+    return _normalize_time_dimensions(data)
 
 def _extract_json_block(raw: str) -> str:
     """Strip Markdown fences and whitespace from the LLM response."""
@@ -176,6 +319,92 @@ def _extract_json_block(raw: str) -> str:
     if match:
         return match.group(1).strip()
     return raw.strip()
+
+
+def _repair_json_like_string(raw: str) -> str:
+    """Repair minor JSON-like issues from LLM output before giving up."""
+    cleaned = (raw or "").strip()
+    if not cleaned:
+        return cleaned
+
+    object_start = cleaned.find("{")
+    object_end = cleaned.rfind("}")
+    if object_start != -1 and object_end != -1 and object_start < object_end:
+        cleaned = cleaned[object_start : object_end + 1]
+
+    cleaned = (
+        cleaned.replace("“", '"')
+        .replace("”", '"')
+        .replace("‘", "'")
+        .replace("’", "'")
+    )
+    cleaned = re.sub(r"/\*[\s\S]*?\*/", "", cleaned)
+    cleaned = re.sub(r"(^|\s)//.*?$", r"\1", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r",\s*([}\]])", r"\1", cleaned)
+    cleaned = re.sub(r'([{\[,]\s*)([A-Za-z_][A-Za-z0-9_()\-]*)(\s*:)', r'\1"\2"\3', cleaned)
+    cleaned = re.sub(
+        r"'([^'\\]*(?:\\.[^'\\]*)*)'",
+        lambda match: '"' + match.group(1).replace('"', '\\"') + '"',
+        cleaned,
+    )
+    return cleaned.strip()
+
+
+_MONTH_DIM_RE = re.compile(r"^MONTH\((.+)\)$", re.IGNORECASE)
+_YEAR_DIM_RE = re.compile(r"^YEAR\((.+)\)$", re.IGNORECASE)
+_YEAR_MONTH_DIM_RE = re.compile(r"^YEAR_MONTH\((.+)\)$", re.IGNORECASE)
+_GROUPING_REQUEST_RE = re.compile(
+    r"\b(by|per|each|every|breakdown|group(?:ed|ing)?|compare|comparison)\b|حسب|لكل",
+    re.IGNORECASE,
+)
+
+
+def _question_requests_grouping(question: str) -> bool:
+    return bool(_GROUPING_REQUEST_RE.search(question or ""))
+
+
+def _normalize_time_dimensions(intent: dict) -> dict:
+    """Prevent month buckets from collapsing across different years."""
+    if intent.get("mode") != "analytics":
+        return intent
+
+    dimensions = intent.get("dimensions") or []
+    if not dimensions:
+        return intent
+
+    year_fields = {
+        match.group(1).strip()
+        for dim in dimensions
+        if (match := _YEAR_DIM_RE.match(dim or ""))
+    }
+    year_month_fields = {
+        match.group(1).strip()
+        for dim in dimensions
+        if (match := _YEAR_MONTH_DIM_RE.match(dim or ""))
+    }
+
+    normalized_dimensions = []
+    changed = False
+    for dim in dimensions:
+        month_match = _MONTH_DIM_RE.match(dim or "")
+        if not month_match:
+            normalized_dimensions.append(dim)
+            continue
+
+        field = month_match.group(1).strip()
+        if field in year_fields or field in year_month_fields:
+            normalized_dimensions.append(dim)
+            continue
+
+        normalized_dimensions.append(f"YEAR_MONTH({field})")
+        changed = True
+
+    if not changed:
+        return intent
+
+    normalized_intent = dict(intent)
+    normalized_intent["dimensions"] = normalized_dimensions
+    return normalized_intent
 
 
 # ------------------------------------------------------------------

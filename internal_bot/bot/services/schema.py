@@ -92,6 +92,14 @@ def get_doctype_fields(doctype: str, user: str | None = None) -> list[dict]:
                 "reqd": bool(f.reqd),
             }
         )
+    # Prepend standard system fields that aren't returned by meta.fields
+    result.insert(0, {
+        "fieldname": "docstatus",
+        "fieldtype": "Int",
+        "label": "Document Status (0=Draft, 1=Submitted, 2=Cancelled)",
+        "options": "",
+        "reqd": False,
+    })
     return result
 
 
@@ -109,6 +117,29 @@ def get_doctype_links(doctype: str) -> list[dict]:
                 }
             )
     return links
+
+
+def get_child_tables(doctype: str, user: str | None = None) -> list[dict]:
+    """Return the primary child tables for a parent DocType with their fields.
+
+    Each entry: {name, fieldname, fields} where fieldname is the Table field
+    on the parent that holds this child table.
+    """
+    meta = frappe.get_meta(doctype)
+    children = []
+    for f in meta.fields:
+        if f.fieldtype != "Table" or not f.options:
+            continue
+        try:
+            child_fields = get_doctype_fields(f.options, user=user)
+        except Exception:
+            child_fields = []
+        children.append({
+            "name": f.options,
+            "fieldname": f.fieldname,
+            "fields": child_fields,
+        })
+    return children
 
 
 def build_schema_context(discovered: list[dict]) -> str:
@@ -140,6 +171,17 @@ def build_schema_context(discovered: list[dict]) -> str:
             lines.append("\nLinks:")
             for lnk in links:
                 lines.append(f"- `{lnk['fieldname']}` → {lnk['links_to']}")
+
+        child_tables = entry.get("child_tables", [])
+        for child in child_tables:
+            child_name = child["name"]
+            child_fields = child.get("fields", [])
+            if child_fields:
+                lines.append(f"\n### Child: {child_name}  (table: `tab{child_name}`, join via parent)")
+                lines.append("| Field | Type | Label |")
+                lines.append("|---|---|---|")
+                for f in child_fields:
+                    lines.append(f"| `{f['fieldname']}` | {f['fieldtype']} | {f['label']} |")
 
         lines.append("")
 

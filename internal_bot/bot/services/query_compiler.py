@@ -13,6 +13,7 @@ Key invariants:
 - ignore_permissions=True must never appear in this module.
 """
 import datetime
+import re
 
 import frappe
 import frappe.utils
@@ -20,9 +21,11 @@ import frappe.utils
 from internal_bot.bot.services import permission_service
 
 _ALLOWED_FUNCS = frozenset({"SUM", "COUNT", "AVG", "MAX", "MIN", "COUNT_DISTINCT"})
+_DATE_EXTRACT_RE = re.compile(r"^(YEAR_MONTH|YEAR|MONTH|DAY|WEEK|DATE)\((.+)\)$", re.IGNORECASE)
 _ALLOWED_OPERATORS = frozenset({
     "=", "!=", ">", "<", ">=", "<=", "like", "in", "not in", "between", "is",
 })
+_STANDARD_CHILD_FIELDS = {"parent", "parenttype", "parentfield", "idx"}
 
 
 def compile_analytics_intent(
@@ -55,21 +58,38 @@ def compile_analytics_intent(
     # Gate 2: get permitted fields for the primary DocType
     permitted_fields = set(permission_service.get_permitted_field_names(primary, user))
     permitted_fields.add("name")  # primary key always accessible
+    join_field_permissions = _get_join_field_permissions(intent.get("joins", []), user)
 
     select_parts = []
     group_by_parts = []
     metric_aliases = []
+    dimension_aliases = []
     params: list = []
 
     # Dimensions → SELECT + GROUP BY
     for dim in intent.get("dimensions", []):
-        if dim not in permitted_fields:
-            frappe.throw(
-                f"Field '{dim}' is not accessible on '{primary}'.",
-                frappe.PermissionError,
+        # Support date extraction: YEAR(fieldname), MONTH(fieldname), etc.
+        date_match = _DATE_EXTRACT_RE.match(dim)
+        if date_match:
+            func, field = date_match.group(1).upper(), date_match.group(2).strip()
+            field_expr, _ = _resolve_field_reference(
+                field, primary, permitted_fields, join_field_permissions
             )
-        select_parts.append(f"`tab{primary}`.`{dim}`")
-        group_by_parts.append(f"`tab{primary}`.`{dim}`")
+            expr = (
+                f"DATE_FORMAT({field_expr}, '%%Y-%%m')"
+                if func == "YEAR_MONTH"
+                else f"{func}({field_expr})"
+            )
+            select_parts.append(f"{expr} AS `{dim}`")
+            group_by_parts.append(expr)
+            dimension_aliases.append(dim)
+        else:
+            dim_expr, dim_alias = _resolve_field_reference(
+                dim, primary, permitted_fields, join_field_permissions
+            )
+            select_parts.append(f"{dim_expr} AS `{dim_alias}`")
+            group_by_parts.append(dim_expr)
+            dimension_aliases.append(dim_alias)
 
     # Metrics → SELECT
     for metric in intent.get("metrics", []):
@@ -81,25 +101,20 @@ def compile_analytics_intent(
             raise ValueError(f"Unsupported aggregate function: '{func}'")
 
         if func == "COUNT_DISTINCT":
-            if field != "*" and field not in permitted_fields:
-                frappe.throw(
-                    f"Field '{field}' is not accessible on '{primary}'.",
-                    frappe.PermissionError,
+            if field == "*":
+                expr = "COUNT(DISTINCT *)"
+            else:
+                field_expr, _ = _resolve_field_reference(
+                    field, primary, permitted_fields, join_field_permissions
                 )
-            expr = (
-                f"COUNT(DISTINCT `tab{primary}`.`{field}`)"
-                if field != "*"
-                else "COUNT(DISTINCT *)"
-            )
+                expr = f"COUNT(DISTINCT {field_expr})"
         elif func == "COUNT" and field == "*":
             expr = "COUNT(*)"
         else:
-            if field not in permitted_fields:
-                frappe.throw(
-                    f"Field '{field}' is not accessible on '{primary}'.",
-                    frappe.PermissionError,
-                )
-            expr = f"{func}(`tab{primary}`.`{field}`)"
+            field_expr, _ = _resolve_field_reference(
+                field, primary, permitted_fields, join_field_permissions
+            )
+            expr = f"{func}({field_expr})"
 
         select_parts.append(f"{expr} AS `{alias}`")
         metric_aliases.append(alias)
@@ -126,21 +141,32 @@ def compile_analytics_intent(
     where_parts = []
 
     for filt in intent.get("filters", []):
-        fieldname, op, value = filt[0], filt[1], filt[2]
+        # Handle both 3-element [field, op, value] and 4-element [doctype, field, op, value]
+        if len(filt) == 4:
+            dt, field, op, value = filt[0], filt[1], filt[2], filt[3]
+            # Build "DocType.field" reference if not already qualified
+            fieldname = f"{dt}.{field}" if "." not in field else field
+        else:
+            fieldname, op, value = filt[0], filt[1], filt[2]
         if op.lower() not in _ALLOWED_OPERATORS:
             raise ValueError(f"Unsupported filter operator: '{op}'")
-        if fieldname not in permitted_fields:
-            frappe.throw(
-                f"Field '{fieldname}' is not accessible on '{primary}'.",
-                frappe.PermissionError,
-            )
-        col = f"`tab{primary}`.`{fieldname}`"
+        col, _ = _resolve_field_reference(
+            fieldname, primary, permitted_fields, join_field_permissions
+        )
         if op.lower() in ("in", "not in"):
             values_list = value if isinstance(value, (list, tuple)) else [value]
             placeholders = ", ".join(["%s"] * len(values_list))
             where_parts.append(f"{col} {op} ({placeholders})")
             params.extend(values_list)
         elif op.lower() == "between":
+            # Guard: skip if either bound is a date-preset string (LLM mistake)
+            _DATE_PRESETS = {
+                "today", "yesterday", "this_week", "this_month",
+                "last_month", "this_year", "last_30_days",
+            }
+            v0, v1 = str(value[0]).lower(), str(value[1]).lower()
+            if v0 in _DATE_PRESETS or v1 in _DATE_PRESETS:
+                continue  # date_range block will handle this correctly
             where_parts.append(f"{col} BETWEEN %s AND %s")
             params.extend([value[0], value[1]])
         else:
@@ -151,13 +177,10 @@ def compile_analytics_intent(
     date_range = intent.get("date_range")
     if date_range:
         dr_field = date_range["field"]
-        if dr_field not in permitted_fields:
-            frappe.throw(
-                f"Field '{dr_field}' is not accessible on '{primary}'.",
-                frappe.PermissionError,
-            )
         from_date, to_date = _resolve_date_preset(date_range)
-        col = f"`tab{primary}`.`{dr_field}`"
+        col, _ = _resolve_field_reference(
+            dr_field, primary, permitted_fields, join_field_permissions
+        )
         if from_date and to_date:
             where_parts.append(f"{col} BETWEEN %s AND %s")
             params.extend([from_date, to_date])
@@ -165,22 +188,39 @@ def compile_analytics_intent(
             where_parts.append(f"{col} = %s")
             params.append(from_date)
 
-    # Row-scope condition — Gate 3: User Permissions injected here
-    row_scope = permission_service.get_row_scope_condition(primary, user)
-    if row_scope:
-        where_parts.append(f"({row_scope})")
+    # Gate 3: Row-scope — frappe.get_list() respects ALL Frappe permission mechanisms
+    # (User Permissions, if_owner, role-based restrictions, etc.).
+    # This is more reliable than build_match_conditions() which only covers User Permissions.
+    try:
+        permitted_names = [
+            r.name
+            for r in frappe.get_list(primary, fields=["name"], ignore_permissions=False, limit=0)
+        ]
+        if not permitted_names:
+            where_parts.append("1=0")
+        else:
+            placeholders = ", ".join(["%s"] * len(permitted_names))
+            where_parts.append(f"`tab{primary}`.`name` IN ({placeholders})")
+            params.extend(permitted_names)
+    except Exception:
+        frappe.log_error(
+            frappe.get_traceback(),
+            "query_compiler: row-scope permission check failed",
+        )
 
     if where_parts:
         sql += "\nWHERE " + "\n  AND ".join(where_parts)
 
-    # GROUP BY
-    if group_by_parts:
+    # GROUP BY — only when aggregating (i.e. there are metrics).
+    # If there are only dimensions and no metrics, we want a flat JOIN result
+    # (e.g. list all Sales Invoice Items), so skip GROUP BY to avoid deduplication.
+    if group_by_parts and metric_aliases:
         sql += "\nGROUP BY " + ", ".join(group_by_parts)
 
     # ORDER BY (validated — only permitted fields or metric aliases)
     order_by = intent.get("order_by")
     if order_by:
-        order_by = _validate_order_by(order_by, permitted_fields, metric_aliases)
+        order_by = _validate_order_by(order_by, permitted_fields, metric_aliases + dimension_aliases)
     if order_by:
         sql += f"\nORDER BY {order_by}"
 
@@ -203,8 +243,7 @@ def _validate_join(join: dict, primary_doctype: str) -> None:
     child_meta = frappe.get_meta(child_dt)
     if child_meta.istable:
         # Child table: verify the parent_link_field exists on the child
-        parent_field = child_meta.get_field(parent_link)
-        if not parent_field:
+        if parent_link not in _STANDARD_CHILD_FIELDS and not child_meta.get_field(parent_link):
             raise ValueError(
                 f"Field '{parent_link}' not found on child DocType '{child_dt}'."
             )
@@ -231,6 +270,84 @@ def _is_child_table(child_doctype: str) -> bool:
         return bool(frappe.get_meta(child_doctype).istable)
     except Exception:
         return False
+
+
+def _get_join_field_permissions(joins: list[dict], user: str) -> dict[str, set[str]]:
+    permissions: dict[str, set[str]] = {}
+    for join in joins or []:
+        child_dt = join["child_doctype"]
+        permitted = set(permission_service.get_permitted_field_names(child_dt, user))
+        permitted.add("name")
+        if _is_child_table(child_dt):
+            permitted.update(_STANDARD_CHILD_FIELDS)
+        permissions[child_dt] = permitted
+    return permissions
+
+
+def _resolve_field_reference(
+    raw_field: str,
+    primary_doctype: str,
+    primary_permitted_fields: set[str],
+    join_field_permissions: dict[str, set[str]],
+) -> tuple[str, str]:
+    field = (raw_field or "").strip()
+    if not field:
+        raise ValueError("Field reference cannot be empty.")
+
+    explicit_doctype, fieldname = _split_field_reference(field)
+    alias = fieldname
+
+    if explicit_doctype:
+        if explicit_doctype == primary_doctype:
+            if fieldname not in primary_permitted_fields:
+                frappe.throw(
+                    f"Field '{fieldname}' is not accessible on '{primary_doctype}'.",
+                    frappe.PermissionError,
+                )
+            return f"`tab{primary_doctype}`.`{fieldname}`", alias
+
+        permitted = join_field_permissions.get(explicit_doctype)
+        if not permitted:
+            raise ValueError(f"DocType '{explicit_doctype}' is not part of the declared joins.")
+        if fieldname not in permitted:
+            # LLMs often misattribute parent fields to child doctypes.
+            # If the field exists on the primary doctype, use it from there silently.
+            if fieldname in primary_permitted_fields:
+                return f"`tab{primary_doctype}`.`{fieldname}`", alias
+            frappe.throw(
+                f"Field '{fieldname}' is not accessible on '{explicit_doctype}'.",
+                frappe.PermissionError,
+            )
+        return f"`tab{explicit_doctype}`.`{fieldname}`", alias
+
+    if fieldname in primary_permitted_fields:
+        return f"`tab{primary_doctype}`.`{fieldname}`", alias
+
+    matches = [dt for dt, permitted in join_field_permissions.items() if fieldname in permitted]
+    if len(matches) == 1:
+        return f"`tab{matches[0]}`.`{fieldname}`", alias
+    if len(matches) > 1:
+        raise ValueError(
+            f"Field '{fieldname}' is ambiguous across joined DocTypes: {', '.join(matches)}."
+        )
+
+    frappe.throw(
+        f"Field '{fieldname}' is not accessible on '{primary_doctype}' or joined DocTypes.",
+        frappe.PermissionError,
+    )
+
+
+def _split_field_reference(raw_field: str) -> tuple[str | None, str]:
+    field = raw_field.strip()
+    match = re.match(r"^`?tab([^`]+)`?\.`?([^`]+)`?$", field)
+    if match:
+        return match.group(1), match.group(2)
+
+    match = re.match(r"^([^.`]+)\.([^.`]+)$", field)
+    if match:
+        return match.group(1), match.group(2)
+
+    return None, field.strip("`")
 
 
 def _resolve_date_preset(date_range: dict) -> tuple[str | None, str | None]:

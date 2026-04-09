@@ -1,0 +1,82 @@
+{
+ "actions": [],
+ "autoname": "format:ASEC-{######}",
+ "creation": "2024-01-01 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "cache_key",
+  "doctype_name",
+  "fingerprint",
+  "provider",
+  "embedding_model",
+  "embedding_type",
+  "embeddings_json"
+ ],
+ "fields": [
+  {
+   "fieldname": "cache_key",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Cache Key",
+   "reqd": 1,
+   "unique": 1,
+   "description": "SHA256 of doctype_name:fingerprint:embedding_model"
+  },
+  {
+   "fieldname": "doctype_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "DocType Name"
+  },
+  {
+   "fieldname": "fingerprint",
+   "fieldtype": "Data",
+   "label": "Schema Fingerprint",
+   "description": "Hash of field names — changes when schema changes"
+  },
+  {
+   "fieldname": "provider",
+   "fieldtype": "Data",
+   "label": "Provider",
+   "description": "LLM provider used to compute embeddings (e.g. OpenAI)"
+  },
+  {
+   "fieldname": "embedding_model",
+   "fieldtype": "Data",
+   "label": "Embedding Model",
+   "description": "Embedding model name (e.g. text-embedding-3-small)"
+  },
+  {
+   "fieldname": "embedding_type",
+   "fieldtype": "Select",
+   "label": "Type",
+   "options": "fields\ncorpus"
+  },
+  {
+   "fieldname": "embeddings_json",
+   "fieldtype": "Long Text",
+   "label": "Embeddings JSON",
+   "description": "JSON dict: {fieldname_or_child_name: [float vector]}"
+  }
+ ],
+ "links": [],
+ "modified": "2024-01-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Internal Bot",
+ "name": "AI Schema Embedding Cache",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "read": 1,
+   "write": 1,
+   "role": "System Manager"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

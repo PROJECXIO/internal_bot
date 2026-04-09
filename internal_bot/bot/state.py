@@ -14,24 +14,47 @@ class GraphState(TypedDict, total=False):
     session_name: str       # AI Chat Session document name
     debug: bool             # include debug fields in response?
     max_rows: int           # from AI Provider Settings.max_result_rows
+    current_date: str       # YYYY-MM-DD for this request
+    current_day_name: str   # Monday, Tuesday, ...
+    current_year: int       # numeric year for this request
+    user_profile_language: str  # normalized user language code from Frappe profile
 
     # ── Node 1: Intent Parser ────────────────────────────────────────
     normalized_question: str
     intent: str             # "greeting" | "query" | "clarification_needed" | "blocked"
     intent_reason: str      # free-text reason (shown for blocked/clarification)
     clarification_options: list  # options list for clarification_needed
+    response_language: str       # final language for this turn, e.g. "en", "ar", "fr"
+    response_language_source: str  # "message" | "profile" | "default"
 
     # ── Node 2: Memory Loader ────────────────────────────────────────
     chat_history: list      # [{"role": "user"|"assistant", "content": "..."}]
     memory_summary: str     # rolling LLM summary of older messages
+    last_user_question: str
+    last_non_follow_up_user_question: str
+    last_assistant_response: dict
+    last_assistant_context_text: str
+    last_discovered_doctypes: list
+    follow_up_to_previous_result: bool
 
     # ── Node 3: Schema Discovery ─────────────────────────────────────
     discovered_doctypes: list   # ["Sales Invoice", "Customer", ...]
     schema_context: str         # Markdown-formatted schema for LLM prompt
+    schema_confidence: float
+    schema_decision: str
+    schema_candidates: list
+    query_embedding: Optional[list]    # embedding vector for the user's question (reused downstream)
+    enriched_schemas_by_doctype: dict  # {doctype_name: {name, fields, links, child_tables}}
 
-    # ── Node 8: Cache Check (runs before query planning) ────────────
-    cache_hit: bool
-    cached_result: Optional[dict]
+    # ── Node: Clarification Planner ──────────────────────────────────
+    ready_to_query: bool         # True = proceed to query_planner
+    clarification_question: str  # question to show the user when not ready
+
+    # ── Node: Presentation Planner ───────────────────────────────────
+    presentation_plan: Optional[dict]  # advisory pre-query data shape and visualization plan
+    pre_query_visualization_preference: str  # "auto" | "card" | "bar" | "pie" | "donut" | "line" | "area" | "stacked_bar" | "heatmap" | "table" | "text"
+    query_shape: str             # "metric" | "category_comparison" | "time_series" | "composition" | "stacked_composition" | "matrix" | "record_list" | "lookup" | "flat_rows" | "auto"
+    presentation_reason: str
 
     # ── Node: Query Planner (replaces sql_generator + validator + executor) ──
     generated_intent: Optional[dict]    # raw JSON intent from LLM (for audit logging)
@@ -45,10 +68,12 @@ class GraphState(TypedDict, total=False):
 
     # ── Node 7: Result Formatter ─────────────────────────────────────
     formatted_response: dict    # final API response
-    response_type: str          # "metric_card" | "bar_chart" | "pie_chart" | "table" | "empty"
+    response_type: str          # "metric_card" | "bar_chart" | "pie_chart" | "donut_chart" | "line_chart" | "area_chart" | "stacked_bar_chart" | "heatmap_chart" | "table" | "empty"
     visualization: Optional[dict]
     summary: str
-    visualization_preference: str  # "auto" | "card" | "bar" | "pie"
+    visualization_preference: str  # "auto" | "card" | "bar" | "pie" | "donut" | "line" | "area" | "stacked_bar" | "heatmap" | "text"
+    answer_prefix: str             # friendly intro sentence, e.g. "Here's what I found:"
+    answer_markdown: str           # markdown answer or brief shown in the frontend
 
     # ── Per-request injected objects (must be in schema for LangGraph to preserve) ──
     _llm_client: Any   # LLMClient instance, injected in chat.py

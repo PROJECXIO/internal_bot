@@ -1,14 +1,39 @@
 frappe.ui.form.on("AI Provider Settings", {
+	provider(frm) {
+		apply_provider_defaults(frm);
+	},
+
 	refresh(frm) {
 		frm.add_custom_button(__("Test Connection"), () => {
 			test_connection(frm);
 		}).addClass("btn-primary");
+
+		frm.add_custom_button(__("Test Embeddings"), () => {
+			test_embeddings(frm);
+		});
 
 		frm.add_custom_button(__("Quick Chat"), () => {
 			open_quick_chat();
 		});
 	},
 });
+
+const DEFAULT_EMBEDDING_MODELS = {
+	"OpenAI": "text-embedding-3-small",
+	"Azure OpenAI": "text-embedding-3-small",
+	"OpenRouter": "openai/text-embedding-3-small",
+	"Anthropic": "",
+};
+
+function apply_provider_defaults(frm) {
+	const current = frm.doc.embedding_model || "";
+	if (current) return;
+
+	const suggested = DEFAULT_EMBEDDING_MODELS[frm.doc.provider] || "";
+	if (!suggested) return;
+
+	frm.set_value("embedding_model", suggested);
+}
 
 // ── Test Connection ────────────────────────────────────────────────
 
@@ -39,6 +64,44 @@ function test_connection(frm) {
 		},
 		error() {
 			btn.text(original_label).prop("disabled", false);
+		},
+	});
+}
+
+function test_embeddings(frm) {
+	const button = frm.custom_buttons[__("Test Embeddings")];
+	const original_label = button.text();
+	button.text(__("Testing…")).prop("disabled", true);
+
+	frappe.call({
+		method: "internal_bot.internal_bot.doctype.ai_provider_settings.ai_provider_settings.test_embeddings",
+		freeze: false,
+		callback(r) {
+			button.text(original_label).prop("disabled", false);
+			if (r.exc) return;
+			const { success, message, embedding_model, latency_ms, dimensions } = r.message;
+			if (success) {
+				frappe.show_alert(
+					{
+						message: __("✓ Embeddings OK — {0} ({1} dims) in {2} ms", [
+							embedding_model,
+							dimensions,
+							latency_ms,
+						]),
+						indicator: "green",
+					},
+					6
+				);
+			} else {
+				frappe.msgprint({
+					title: __("Embeddings Test Failed"),
+					indicator: "red",
+					message: `<pre style="white-space:pre-wrap">${frappe.utils.escape_html(message)}</pre>`,
+				});
+			}
+		},
+		error() {
+			button.text(original_label).prop("disabled", false);
 		},
 	});
 }

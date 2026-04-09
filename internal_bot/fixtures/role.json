@@ -1,0 +1,9 @@
+[
+  {
+    "doctype": "Role",
+    "name": "AI User",
+    "role_name": "AI User",
+    "desk_access": 1,
+    "is_custom": 1
+  }
+]

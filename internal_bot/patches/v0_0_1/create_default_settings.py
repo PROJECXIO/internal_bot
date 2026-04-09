@@ -18,6 +18,7 @@ def execute():
 		{
 			"provider": "OpenAI",
 			"model": "gpt-4o",
+			"embedding_model": "text-embedding-3-small",
 			"api_key": "",  # Must be configured by System Manager via the Settings form
 			"max_tokens": 2000,
 			"temperature": 0.0,

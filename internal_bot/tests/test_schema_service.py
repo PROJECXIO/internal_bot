@@ -9,6 +9,17 @@ from unittest.mock import patch
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
+from internal_bot.bot.services.doctype_aliases import (
+	invalidate_alias_cache,
+	get_alias_index,
+	get_aliases_for_doctype,
+)
+from internal_bot.bot.services.schema_corpus import (
+	build_corpus_document,
+	compute_schema_fingerprint,
+	get_corpus,
+	invalidate_corpus_cache,
+)
 from internal_bot.bot.services.schema import (
 	build_schema_context,
 	discover_doctypes,
@@ -19,6 +30,16 @@ from internal_bot.bot.services.schema import (
 
 
 class TestSchemaDiscovery(FrappeTestCase):
+	def setUp(self):
+		invalidate_alias_cache()
+		invalidate_corpus_cache()
+
+	def tearDown(self):
+		frappe.db.delete("AI DocType Alias", {"alias": ["in", ["Schema Test Alias", "عميل اختبار", "مبيعات"]]})
+		frappe.db.commit()
+		invalidate_alias_cache()
+		invalidate_corpus_cache()
+
 	def test_discover_customer_doctype(self):
 		results = discover_doctypes(["customer"])
 		names = [r["name"] for r in results]
@@ -121,3 +142,52 @@ class TestSchemaDiscovery(FrappeTestCase):
 
 		names = [r["name"] for r in results]
 		self.assertIn("Customer", names)
+
+	def test_alias_service_cache_and_lookup(self):
+		for payload in (
+			{"doctype_name": "Customer", "alias": "Schema Test Alias", "language": "en"},
+			{"doctype_name": "Customer", "alias": "عميل اختبار", "language": "ar"},
+		):
+			if not frappe.db.exists("AI DocType Alias", payload):
+				frappe.get_doc({"doctype": "AI DocType Alias", **payload}).insert(ignore_permissions=True)
+		frappe.db.commit()
+		invalidate_alias_cache()
+
+		index = get_alias_index()
+		aliases = get_aliases_for_doctype("Customer")
+
+		self.assertEqual(index.get("schema test alias"), "Customer")
+		self.assertIn("عميل اختبار", aliases)
+
+	def test_alias_service_indexes_arabic_article_normalized_aliases(self):
+		payload = {"doctype_name": "Sales Invoice", "alias": "مبيعات", "language": "ar"}
+		if not frappe.db.exists("AI DocType Alias", payload):
+			frappe.get_doc({"doctype": "AI DocType Alias", **payload}).insert(ignore_permissions=True)
+		frappe.db.commit()
+		invalidate_alias_cache()
+
+		index = get_alias_index()
+
+		self.assertEqual(index.get("مبيعات"), "Sales Invoice")
+		self.assertEqual(index.get("المبيعات"), "Sales Invoice")
+
+	def test_build_corpus_document_includes_aliases_and_tokens(self):
+		document = build_corpus_document(
+			"Customer",
+			meta_fields=[{"fieldname": "customer_name", "label": "Customer Name"}],
+			meta_links=[{"fieldname": "territory", "links_to": "Territory"}],
+			module="Selling",
+			description="Master data",
+		)
+
+		self.assertIn("customer name", document.normalized_text)
+		self.assertIn("territory", document.link_targets)
+		self.assertIn("customer", document.token_set)
+
+	def test_corpus_build_and_staleness_keys_off_fingerprint(self):
+		first_fingerprint = compute_schema_fingerprint()
+		corpus = get_corpus(set())
+		second_fingerprint = compute_schema_fingerprint()
+
+		self.assertTrue(corpus)
+		self.assertEqual(first_fingerprint, second_fingerprint)

@@ -6,6 +6,7 @@
  "field_order": [
   "provider",
   "model",
+  "embedding_model",
   "api_key",
   "api_base",
   "api_version",
@@ -19,6 +20,8 @@
   "section_break_cache",
   "enable_cache",
   "cache_ttl_hours",
+  "section_break_debug",
+  "enable_debug_context_window",
   "section_break_security",
   "blocked_doctypes",
   "max_result_rows"
@@ -38,6 +41,12 @@
    "in_list_view": 1,
    "label": "Model",
    "reqd": 1
+  },
+  {
+   "fieldname": "embedding_model",
+   "fieldtype": "Data",
+   "label": "Embedding Model",
+   "description": "Optional separate model for embeddings. If empty, a provider-based default is used."
   },
   {
    "fieldname": "api_key",
@@ -121,6 +130,18 @@
    "label": "Cache TTL (hours)"
   },
   {
+   "fieldname": "section_break_debug",
+   "fieldtype": "Section Break",
+   "label": "Developer Debug"
+  },
+  {
+   "default": "0",
+   "description": "When a request is sent with debug enabled, include the backend context window and token usage in the response payload.",
+   "fieldname": "enable_debug_context_window",
+   "fieldtype": "Check",
+   "label": "Return Debug Context Window"
+  },
+  {
    "fieldname": "section_break_security",
    "fieldtype": "Section Break",
    "label": "Security"
@@ -157,6 +178,11 @@
    "role": "System Manager",
    "share": 1,
    "write": 1
+  },
+  {
+   "read": 1,
+   "write": 1,
+   "role": "AI User"
   }
  ],
  "sort_field": "modified",

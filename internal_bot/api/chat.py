@@ -22,7 +22,10 @@ from dotenv import load_dotenv
 from frappe import _
 
 from internal_bot.bot.graph import get_graph
+from internal_bot.bot.services.formatter import normalize_cached_response
+from internal_bot.bot.services.language import get_user_profile_language
 from internal_bot.bot.services.llm_client import get_llm_client
+from internal_bot.bot import trace
 
 # Load LangSmith (and other) env vars from the app-level .env file.
 # This runs once per worker process when the module is first imported.
@@ -70,12 +73,17 @@ def ask(message: str, session_id: str = None, debug: bool = False):
 		}
 
 	# Build initial state
+	current_dt = frappe.utils.get_datetime()
 	initial_state = {
 		"user": user,
 		"raw_message": message.strip(),
 		"session_name": session_name,
 		"debug": bool(debug),
 		"max_rows": settings.max_result_rows or 100,
+		"current_date": str(current_dt.date()),
+		"current_day_name": current_dt.strftime("%A"),
+		"current_year": current_dt.year,
+		"user_profile_language": get_user_profile_language(user),
 		"start_time": time.monotonic(),
 		"node_trace": [],
 		"timing": {},
@@ -85,6 +93,7 @@ def ask(message: str, session_id: str = None, debug: bool = False):
 		"input_tokens": 0,
 		"output_tokens": 0,
 		"result_row_count": 0,
+		"answer_markdown": "",
 		# Inject shared objects into state so nodes don't need to re-instantiate
 		"_llm_client": llm_client,
 		"_settings": settings,
@@ -92,17 +101,32 @@ def ask(message: str, session_id: str = None, debug: bool = False):
 
 	# Run the LangGraph pipeline
 	try:
+		trace.request_start(
+			initial_state,
+			[
+				f'Question: "{message.strip()}"',
+				f"Session: {session_name}",
+				"Invoking graph...",
+			],
+		)
 		graph = get_graph()
-		final_state = graph.invoke(initial_state)
+		final_state = graph.invoke(
+			initial_state,
+			config=trace.graph_invoke_config(initial_state, run_name="internal_bot.ask"),
+		)
 		response = final_state.get("formatted_response") or {
 			"status": "error",
 			"reason": "No response generated.",
 			"meta": {"confidence": 0.0},
 		}
 		response["session_id"] = session_name
+		trace.request_complete(final_state, response)
+		trace.flush_langsmith()
 		return response
 	except Exception as exc:
 		frappe.log_error(message=frappe.get_traceback(), title="Internal Bot: graph invoke failed")
+		trace.request_error(initial_state, str(exc))
+		trace.flush_langsmith()
 		return {
 			"status": "error",
 			"reason": "An internal error occurred. Please try again.",
@@ -244,6 +268,24 @@ def get_session_history(session_id: str = None) -> dict:
 	}
 
 
+@frappe.whitelist(methods=["POST"])
+def delete_session(session_id: str) -> dict:
+	"""Permanently delete a chat session and its messages for the current user."""
+	user = _require_authenticated_user()
+
+	if not session_id or not frappe.db.exists("AI Chat Session", {"name": session_id, "user": user}):
+		frappe.throw(_("Chat session not found."), frappe.DoesNotExistError)
+
+	frappe.db.delete("AI Chat Message", {"session": session_id})
+	frappe.db.delete("AI Chat Session", {"name": session_id, "user": user})
+	frappe.db.commit()
+
+	return {
+		"ok": True,
+		"deleted_session_id": session_id,
+	}
+
+
 def _get_or_create_session(user: str, session_id: str | None = None) -> str:
 	"""
 	Return the requested AI Chat Session for the user, or create one.
@@ -313,7 +355,17 @@ def _deserialize_message(message: dict) -> dict:
 	if message.get("role") == "assistant" and message.get("structured_response"):
 		try:
 			payload = frappe.parse_json(message["structured_response"])
+			payload = normalize_cached_response(
+				payload,
+				{
+					"raw_message": message.get("content") or "",
+					"normalized_question": payload.get("title") or "",
+					"query_result_rows": payload.get("rows") or [],
+					"answer_markdown": payload.get("markdown") or "",
+				},
+			)
 			payload["role"] = "assistant"
+			payload["content"] = payload.get("content") or message.get("content") or ""
 			return payload
 		except Exception:
 			pass

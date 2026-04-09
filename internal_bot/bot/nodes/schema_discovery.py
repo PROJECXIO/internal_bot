@@ -1,15 +1,8 @@
 """
 Node 3 — Schema Discovery
 
-Extracts keywords from the normalized question, discovers relevant
-DocTypes (permission-gated), fetches their permitted fields and links,
-and builds a Markdown schema context string for the query planner.
-
-Permission gates applied here:
-  Gate 1 — DocType access: only DocTypes the user can read are surfaced.
-  Gate 2 — Field visibility: only fields the user can see are included.
-
-Sample rows are intentionally excluded (they could expose real data to the LLM).
+Hybrid schema retrieval using multilingual normalization, aliases,
+lexical overlap, and optional embeddings.
 """
 import re
 import time
@@ -17,47 +10,92 @@ import time
 import frappe
 
 from internal_bot.bot.services import schema as schema_svc
+from internal_bot.bot.services import hybrid_scorer, schema_corpus, schema_field_filter
+from internal_bot.bot.services.text_normalizer import normalize_text, remove_stop_words, tokenize
 from internal_bot.bot.state import GraphState
-from internal_bot.bot import progress
+from internal_bot.bot import progress, trace
 
-
-# Common ERP stop words to ignore during keyword extraction
-_STOP_WORDS = {
-    "show", "me", "all", "the", "a", "an", "of", "in", "for", "and",
-    "or", "is", "are", "was", "were", "what", "how", "many", "total",
-    "list", "give", "get", "find", "fetch", "today", "yesterday",
-    "last", "this", "month", "year", "week", "date", "time", "by",
-    "from", "to", "with", "on", "at", "between", "latest", "recent",
-}
+_FOLLOW_UP_IDENTIFIER_RE = re.compile(r"(?:[a-z]+[-_]?\d+|\d{4})", re.IGNORECASE)
 
 
 def run(state: GraphState) -> dict:
     t0 = time.monotonic()
     node_name = "schema_discovery"
+    log_t0 = trace.node_start(state, node_name)
     if state.get("_emit_progress"):
         progress.emit(state, node_name, "Looking at relevant data")
 
     user = state.get("user") or frappe.session.user
     question = state.get("normalized_question") or state.get("raw_message", "")
+    llm_client = state.get("_llm_client")
     settings = state.get("_settings")
-    blocked = settings.get_blocked_doctype_list() if settings else []
+    blocked = set(settings.get_blocked_doctype_list() if settings else [])
+    normalized_question = normalize_text(question)
+    query_tokens = remove_stop_words(tokenize(normalized_question))
+    trace.detail(state, "Normalized question", normalized_question)
+    trace.detail(state, "Query tokens", query_tokens)
 
-    keywords = _extract_keywords(question)
-
-    if not keywords:
+    if not query_tokens and not state.get("follow_up_to_previous_result"):
         return _update(state, node_name, t0, {
             "discovered_doctypes": [],
             "schema_context": "",
-        })
+            "schema_confidence": 0.0,
+            "schema_decision": "no_match",
+            "schema_candidates": [],
+        }, log_t0)
 
-    # Gate 1: discover_permitted_doctypes filters by frappe.has_permission
-    discovered_rows = schema_svc.discover_permitted_doctypes(keywords, user, blocked)
-    discovered_names = [r["name"] for r in discovered_rows]
+    corpus = schema_corpus.get_corpus(blocked)
+    if llm_client:
+        corpus = schema_corpus.compute_and_cache_embeddings(corpus, llm_client)
 
-    # Enrich each discovered DocType with permission-filtered fields and links
+    query_embedding = None
+    if llm_client:
+        embedding_result = llm_client.create_embeddings([question])
+        if embedding_result and isinstance(embedding_result, list):
+            first_embedding = embedding_result[0] if embedding_result else None
+            if isinstance(first_embedding, list):
+                query_embedding = first_embedding
+
+    candidates = hybrid_scorer.rank_candidates(
+        query=question,
+        corpus=corpus,
+        user=user,
+        blocked=blocked,
+        query_embedding=query_embedding,
+        preferred_doctypes=state.get("last_discovered_doctypes") or [],
+        follow_up_to_previous_result=bool(state.get("follow_up_to_previous_result")),
+    )
+    decision, selected_candidates = hybrid_scorer.classify_confidence(candidates)
+    previous_doctypes = set(state.get("last_discovered_doctypes") or [])
+    if (
+        previous_doctypes
+        and decision in ("ambiguous", "low_confidence")
+        and _should_prefer_previous_doctype(
+            query_tokens=query_tokens,
+            follow_up_to_previous_result=bool(state.get("follow_up_to_previous_result")),
+        )
+    ):
+        preferred = next(
+            (candidate for candidate in selected_candidates if candidate.doctype_name in previous_doctypes),
+            None,
+        )
+        if preferred:
+            selected_candidates = [preferred]
+            decision = "clear_winner"
+            trace.detail(state, "Preferring previous doctype", preferred.doctype_name)
+
+    discovered_names = [candidate.doctype_name for candidate in selected_candidates]
+    trace.detail(state, "Schema decision", decision)
+    trace.detail(
+        state,
+        "Schema candidates",
+        [f"{candidate.doctype_name}:{candidate.final_score}" for candidate in candidates[:5]],
+    )
+
+    # Enrich each discovered DocType with permission-filtered fields, links,
+    # and child table schemas so the LLM can generate child-table joins.
     enriched = []
-    for row in discovered_rows[:5]:  # cap at 5 DocTypes to keep prompt size manageable
-        name = row["name"]
+    for name in discovered_names[:5]:
         try:
             # Gate 2: get_doctype_fields with user strips permlevel-restricted fields
             fields = schema_svc.get_doctype_fields(name, user=user)
@@ -65,32 +103,79 @@ def run(state: GraphState) -> dict:
         except Exception:
             fields, links = [], []
 
+        try:
+            child_tables = schema_svc.get_child_tables(name, user=user)
+        except Exception:
+            child_tables = []
+
         enriched.append({
             "name": name,
             "fields": fields,
             "links": links,
+            "child_tables": child_tables,
         })
 
-    schema_ctx = schema_svc.build_schema_context(enriched)
+    enriched_by_name = {e["name"]: e for e in enriched}
+
+    # For a clear winner, apply field-level filtering immediately so the query
+    # LLM receives a compact, relevant schema instead of all fields/child tables.
+    # (Ambiguous path is filtered later by intent_resolver after it picks the winner.)
+    if decision == "clear_winner" and len(enriched) == 1 and query_embedding and llm_client:
+        winner_entry = enriched[0]
+        try:
+            filtered_fields, filtered_children = schema_field_filter.filter_schema_for_query(
+                question=question,
+                query_embedding=query_embedding,
+                fields=winner_entry.get("fields") or [],
+                child_tables=winner_entry.get("child_tables") or [],
+                llm_client=llm_client,
+                doctype_name=winner_entry["name"],
+            )
+            filtered_entry = {**winner_entry, "fields": filtered_fields, "child_tables": filtered_children}
+            schema_ctx = schema_svc.build_schema_context([filtered_entry])
+            trace.detail(state, "Schema context filtered (clear winner)", True)
+        except Exception as exc:
+            frappe.log_error(str(exc), "SchemaDiscovery: field filtering failed")
+            schema_ctx = schema_svc.build_schema_context(enriched)
+    else:
+        schema_ctx = schema_svc.build_schema_context(enriched)
+
+    schema_confidence = round(selected_candidates[0].final_score, 4) if selected_candidates else 0.0
+    schema_candidates = [
+        (candidate.doctype_name, round(candidate.final_score, 4))
+        for candidate in candidates[:5]
+    ]
 
     return _update(state, node_name, t0, {
         "discovered_doctypes": discovered_names,
         "schema_context": schema_ctx,
-    })
+        "schema_confidence": schema_confidence,
+        "schema_decision": decision,
+        "schema_candidates": schema_candidates,
+        "query_embedding": query_embedding,
+        "enriched_schemas_by_doctype": enriched_by_name,
+    }, log_t0)
 
 
-def _extract_keywords(question: str) -> list:
-    """Extract meaningful noun-like tokens from the question."""
-    words = re.findall(r"[a-z]+", question.lower())
-    keywords = [w for w in words if w not in _STOP_WORDS and len(w) > 2]
-    # Also add 2-gram combinations (e.g. "sales invoice", "purchase order")
-    bigrams = [f"{keywords[i]} {keywords[i+1]}" for i in range(len(keywords) - 1)]
-    return list(dict.fromkeys(keywords + bigrams))  # deduplicate, preserve order
-
-
-def _update(state: GraphState, node_name: str, t0: float, updates: dict) -> dict:
+def _update(state: GraphState, node_name: str, t0: float, updates: dict, log_t0: float) -> dict:
     elapsed = round((time.monotonic() - t0) * 1000, 2)
     trace = list(state.get("node_trace") or []) + [node_name]
     timing = dict(state.get("timing") or {})
     timing[node_name] = elapsed
+    from internal_bot.bot import trace as bench_trace
+    bench_trace.node_end(state, node_name, log_t0)
     return {**updates, "node_trace": trace, "timing": timing}
+
+
+def _should_prefer_previous_doctype(
+    query_tokens: list[str],
+    follow_up_to_previous_result: bool,
+) -> bool:
+    if not follow_up_to_previous_result:
+        return False
+    compact_tokens = [token for token in query_tokens if token]
+    if not compact_tokens:
+        return True
+    if len(compact_tokens) > 3:
+        return False
+    return not any(_FOLLOW_UP_IDENTIFIER_RE.search(token) for token in compact_tokens)

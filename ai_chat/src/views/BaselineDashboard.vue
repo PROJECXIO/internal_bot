@@ -176,11 +176,15 @@
         <section class="baseline-section baseline-charts-row" v-if="visibleResults.length">
           <div class="baseline-chart-box baseline-chart-box--wide">
             <h3 class="baseline-chart-box__title">Wall Time by Query (ms)</h3>
-            <VueApexCharts type="bar" :options="timingChartOptions" :series="timingChartSeries" />
+            <div class="baseline-chart-scroll">
+              <VueApexCharts type="bar" :options="timingChartOptions" :series="timingChartSeries" />
+            </div>
           </div>
           <div class="baseline-chart-box baseline-chart-box--wide">
             <h3 class="baseline-chart-box__title">Retries by Query</h3>
-            <VueApexCharts type="bar" :options="retriesChartOptions" :series="retriesChartSeries" />
+            <div class="baseline-chart-scroll">
+              <VueApexCharts type="bar" :options="retriesChartOptions" :series="retriesChartSeries" />
+            </div>
           </div>
         </section>
 
@@ -188,7 +192,9 @@
         <section class="baseline-section baseline-charts-row" v-if="tokensSummaryAvailable && visibleResults.length">
           <div class="baseline-chart-box baseline-chart-box--wide">
             <h3 class="baseline-chart-box__title">Token Usage per Query (Input + Output)</h3>
-            <VueApexCharts type="bar" :options="tokenPerQueryOptions" :series="tokenPerQuerySeries" />
+            <div class="baseline-chart-scroll">
+              <VueApexCharts type="bar" :options="tokenPerQueryOptions" :series="tokenPerQuerySeries" />
+            </div>
           </div>
           <div class="baseline-chart-box baseline-chart-box--wide">
             <h3 class="baseline-chart-box__title">Avg Tokens by Category</h3>
@@ -637,6 +643,14 @@ export default {
       };
     },
 
+    // ── Dynamic scroll width for per-query bar charts ────
+    chartScrollWidth() {
+      const n = this.visibleResults.length;
+      if (!n) return "100%";
+      // 28px per bar, minimum 560px so short runs still fill the box
+      return Math.max(560, n * 28);
+    },
+
     // ── ApexCharts: wall time per query ──────────────────
     timingChartSeries() {
       if (!this.visibleResults.length) return [];
@@ -650,7 +664,7 @@ export default {
         return "#94a3b8";
       };
       return {
-        chart: { type: "bar", height: 180, toolbar: { show: false }, animations: { enabled: false } },
+        chart: { type: "bar", width: this.chartScrollWidth, height: 180, toolbar: { show: false }, animations: { enabled: false } },
         plotOptions: { bar: { columnWidth: "80%", distributed: true } },
         colors: this.visibleResults.map((r) => colorFor(r)),
         xaxis: {
@@ -672,7 +686,7 @@ export default {
     },
     retriesChartOptions() {
       return {
-        chart: { type: "bar", height: 180, toolbar: { show: false }, animations: { enabled: false } },
+        chart: { type: "bar", width: this.chartScrollWidth, height: 180, toolbar: { show: false }, animations: { enabled: false } },
         plotOptions: { bar: { columnWidth: "80%", distributed: true } },
         colors: this.visibleResults.map((r) => ((r.retries || 0) > 0 ? "#f59e0b" : "#22c55e")),
         xaxis: {
@@ -700,6 +714,7 @@ export default {
         chart: {
           type: "bar",
           stacked: true,
+          width: this.chartScrollWidth,
           height: 200,
           toolbar: { show: false },
           animations: { enabled: false },
@@ -1859,6 +1874,28 @@ export default {
 .baseline-detail-table tr { border-bottom: 1px solid #f1f5f9; }
 .baseline-detail-table td { padding: 5px 6px; color: #1e293b; }
 .baseline-detail-table__key { color: #6366f1; width: 140px; font-family: monospace; font-weight: 600; }
+
+/* ── Chart x-scroll wrapper ──────────────────────────── */
+.baseline-chart-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 4px; /* room for scrollbar */
+}
+/* Webkit scrollbar styling */
+.baseline-chart-scroll::-webkit-scrollbar {
+  height: 5px;
+}
+.baseline-chart-scroll::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 3px;
+}
+.baseline-chart-scroll::-webkit-scrollbar-thumb {
+  background: linear-gradient(90deg, #6366f1, #8b5cf6);
+  border-radius: 3px;
+}
+.baseline-chart-scroll::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(90deg, #4f46e5, #7c3aed);
+}
 
 /* ── Cost column in table ────────────────────────────── */
 .baseline-table__cost {

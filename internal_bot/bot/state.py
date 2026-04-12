@@ -50,6 +50,9 @@ class GraphState(TypedDict, total=False):
     ready_to_query: bool         # True = proceed to query_planner
     clarification_question: str  # question to show the user when not ready
 
+    # ── Node: Query Architect ────────────────────────────────────────
+    join_plan: Optional[dict]  # {primary_doctype, joins: [{child_doctype, parent_link_field, join_type, join_on?}]}
+
     # ── Node: Presentation Planner ───────────────────────────────────
     presentation_plan: Optional[dict]  # advisory pre-query data shape and visualization plan
     pre_query_visualization_preference: str  # "auto" | "card" | "bar" | "pie" | "donut" | "line" | "area" | "stacked_bar" | "heatmap" | "table" | "text"

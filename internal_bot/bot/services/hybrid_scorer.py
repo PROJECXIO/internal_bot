@@ -42,6 +42,7 @@ _SALES_TERMS = {
     "sale",
     "sales",
     "selling",
+    "sold",
     "revenue",
     "invoice",
     "invoices",
@@ -50,8 +51,12 @@ _SALES_TERMS = {
     "movement",
     "status",
     "performance",
-    "مبيعات",
-    "بيع",
+    "مبيعات",   # sales (plural noun)
+    "بيع",      # selling / sale (base form)
+    "مبيعا",    # sold (passive participle + tanwin alef, e.g. "اصناف مبيعا")
+    "مبيع",     # sold (passive participle base)
+    "مباع",     # sold (alternative passive form)
+    "مبيعه",    # sold (informal feminine)
     "فواتير",
     "فاتورة",
     "حركة",

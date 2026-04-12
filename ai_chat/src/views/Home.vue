@@ -3,12 +3,22 @@
     <aside class="session-sidebar shrink-0">
       <div class="session-sidebar__header">
         <RevenyuLogo class="text-gray-900" />
-        <button
-          class="session-sidebar__signout"
-          @click="$auth.logout()"
-        >
-          Sign out
-        </button>
+        <div class="session-sidebar__header-actions">
+          <router-link
+            v-if="canAccessBaseline"
+            to="/baseline"
+            class="session-sidebar__baseline-link"
+            title="Baseline Dashboard"
+          >
+            Baseline
+          </router-link>
+          <button
+            class="session-sidebar__signout"
+            @click="$auth.logout()"
+          >
+            Sign out
+          </button>
+        </div>
       </div>
 
       <button
@@ -131,12 +141,14 @@ export default {
       _pollTimer: null,
       debugEnabled: false,
       _suppressRouteSessionWatch: false,
+      canAccessBaseline: false,
     };
   },
 
   async mounted() {
     await this.initializeSession();
     this.setupSocket();
+    this.checkBaselineAccess();
   },
 
   beforeUnmount() {
@@ -407,6 +419,15 @@ export default {
         meta: payload.meta || {},
         debug: payload.debug || null,
       };
+    },
+
+    async checkBaselineAccess() {
+      try {
+        const res = await this.$call("internal_bot.api.baseline.can_access_dashboard");
+        this.canAccessBaseline = Boolean(res?.allowed);
+      } catch {
+        this.canAccessBaseline = false;
+      }
     },
 
     async loadDebugSettings() {

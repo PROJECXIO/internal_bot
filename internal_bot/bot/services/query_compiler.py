@@ -60,11 +60,23 @@ def compile_analytics_intent(
     permitted_fields.add("name")  # primary key always accessible
     join_field_permissions = _get_join_field_permissions(intent.get("joins", []), user)
 
+    # Ranked primary dimension mode — generates a CTE-based query.
+    # Used for "top-X-and-their-Y" patterns, e.g. "top items by purchase amount
+    # and their suppliers". The CTE ranks the first dimension by the first metric's
+    # total, then the main query shows all secondary dimensions for those top items.
+    if (
+        intent.get("rank_by_primary_dimension")
+        and len(intent.get("dimensions", [])) >= 2
+        and intent.get("metrics")
+    ):
+        return _compile_ranked_analytics_intent(
+            intent, primary, user, max_rows, permitted_fields, join_field_permissions
+        )
+
     select_parts = []
     group_by_parts = []
     metric_aliases = []
     dimension_aliases = []
-    params: list = []
 
     # Dimensions → SELECT + GROUP BY
     for dim in intent.get("dimensions", []):
@@ -122,29 +134,268 @@ def compile_analytics_intent(
     if not select_parts:
         raise ValueError("AnalyticsIntent must have at least one dimension or metric.")
 
-    # FROM
-    sql = f"SELECT {', '.join(select_parts)}\nFROM `tab{primary}`"
+    # FROM + JOINs
+    sql = f"SELECT {', '.join(select_parts)}\n"
+    sql += _build_from_joins_sql(primary, intent.get("joins", []))
 
-    # JOINs
-    for join in intent.get("joins", []):
+    # WHERE + params
+    where_parts, params = _build_where_clause(
+        intent, primary, permitted_fields, join_field_permissions, user
+    )
+    if where_parts:
+        sql += "\nWHERE " + "\n  AND ".join(where_parts)
+
+    # GROUP BY — only when aggregating (i.e. there are metrics).
+    # If there are only dimensions and no metrics, we want a flat JOIN result
+    # (e.g. list all Sales Invoice Items), so skip GROUP BY to avoid deduplication.
+    if group_by_parts and metric_aliases:
+        sql += "\nGROUP BY " + ", ".join(group_by_parts)
+
+    # ORDER BY (validated — only permitted fields or metric aliases)
+    order_by = intent.get("order_by")
+    if order_by:
+        order_by = _validate_order_by(order_by, permitted_fields, metric_aliases + dimension_aliases)
+    if order_by:
+        sql += f"\nORDER BY {order_by}"
+
+    # LIMIT (hard cap)
+    limit = min(int(intent.get("limit", max_rows)), max_rows)
+    sql += "\nLIMIT %s"
+    params.append(limit)
+
+    return sql, params
+
+
+def _compile_ranked_analytics_intent(
+    intent: dict,
+    primary: str,
+    user: str,
+    max_rows: int,
+    permitted_fields: set,
+    join_field_permissions: dict,
+) -> tuple[str, list]:
+    """
+    Generate a CTE-based query for "top-X-and-their-Y" patterns.
+
+    Example: "top items by purchase amount and their suppliers"
+
+    The CTE ranks the first dimension (e.g. item_code) by the first metric's
+    aggregate total across ALL values of the secondary dimensions. The main query
+    then shows ALL secondary dimensions for only those top-ranked items, ordered
+    by the CTE rank so items always appear grouped by their rank.
+
+    This correctly answers questions like:
+      - "top purchased items and their suppliers"
+      - "top selling items and who sold them"
+      - "top customers and their sales reps"
+
+    Requires intent["rank_by_primary_dimension"] = true, at least 2 dimensions,
+    and at least 1 metric.
+    """
+    dimensions = intent.get("dimensions", [])
+    metrics = intent.get("metrics", [])
+    limit = min(int(intent.get("limit", max_rows)), max_rows)
+
+    # ── Resolve first dimension (the one to rank by) ──────────────────
+    primary_dim = dimensions[0]
+    date_match = _DATE_EXTRACT_RE.match(primary_dim)
+    if date_match:
+        func, field = date_match.group(1).upper(), date_match.group(2).strip()
+        field_expr, _ = _resolve_field_reference(
+            field, primary, permitted_fields, join_field_permissions
+        )
+        primary_dim_expr = (
+            f"DATE_FORMAT({field_expr}, '%%Y-%%m')"
+            if func == "YEAR_MONTH"
+            else f"{func}({field_expr})"
+        )
+    else:
+        primary_dim_expr, _ = _resolve_field_reference(
+            primary_dim, primary, permitted_fields, join_field_permissions
+        )
+
+    # CTE column alias is the bare fieldname (e.g. "item_code")
+    _, primary_dim_fieldname = _split_field_reference(primary_dim)
+
+    # ── Resolve first metric (used to rank in the CTE) ────────────────
+    first_metric = metrics[0]
+    mfunc = first_metric["func"].upper()
+    mfield = first_metric["field"]
+    if mfunc not in _ALLOWED_FUNCS:
+        raise ValueError(f"Unsupported aggregate function: '{mfunc}'")
+    if mfunc == "COUNT_DISTINCT":
+        if mfield == "*":
+            metric_agg_expr = "COUNT(DISTINCT *)"
+        else:
+            mf_expr, _ = _resolve_field_reference(
+                mfield, primary, permitted_fields, join_field_permissions
+            )
+            metric_agg_expr = f"COUNT(DISTINCT {mf_expr})"
+    elif mfunc == "COUNT" and mfield == "*":
+        metric_agg_expr = "COUNT(*)"
+    else:
+        mf_expr, _ = _resolve_field_reference(
+            mfield, primary, permitted_fields, join_field_permissions
+        )
+        metric_agg_expr = f"{mfunc}({mf_expr})"
+
+    # ── FROM + JOINs (shared between CTE and main query) ─────────────
+    from_joins_sql = _build_from_joins_sql(primary, intent.get("joins", []))
+
+    # ── WHERE (shared between CTE and main query; params duplicated) ──
+    where_parts, where_params = _build_where_clause(
+        intent, primary, permitted_fields, join_field_permissions, user
+    )
+    where_sql = ("\nWHERE " + "\n  AND ".join(where_parts)) if where_parts else ""
+
+    # ── CTE: rank first dimension by first metric ─────────────────────
+    cte = (
+        f"WITH `_ranked_primary` AS (\n"
+        f"  SELECT {primary_dim_expr} AS `{primary_dim_fieldname}`,\n"
+        f"         {metric_agg_expr} AS `_rank_val`\n"
+        f"  {from_joins_sql}"
+        f"  {where_sql}\n"
+        f"  GROUP BY {primary_dim_expr}\n"
+        f"  ORDER BY `_rank_val` DESC\n"
+        f"  LIMIT %s\n"
+        f")"
+    )
+    cte_params = list(where_params) + [limit]
+
+    # ── Main query: all dimensions + metrics, filtered to top items ───
+    select_parts = []
+    group_by_parts = []
+    metric_aliases = []
+    dimension_aliases = []
+
+    for dim in dimensions:
+        d_date_match = _DATE_EXTRACT_RE.match(dim)
+        if d_date_match:
+            func, field = d_date_match.group(1).upper(), d_date_match.group(2).strip()
+            field_expr, _ = _resolve_field_reference(
+                field, primary, permitted_fields, join_field_permissions
+            )
+            expr = (
+                f"DATE_FORMAT({field_expr}, '%%Y-%%m')"
+                if func == "YEAR_MONTH"
+                else f"{func}({field_expr})"
+            )
+            select_parts.append(f"{expr} AS `{dim}`")
+            group_by_parts.append(expr)
+            dimension_aliases.append(dim)
+        else:
+            dim_expr, dim_alias = _resolve_field_reference(
+                dim, primary, permitted_fields, join_field_permissions
+            )
+            select_parts.append(f"{dim_expr} AS `{dim_alias}`")
+            group_by_parts.append(dim_expr)
+            dimension_aliases.append(dim_alias)
+
+    for metric in metrics:
+        func = metric["func"].upper()
+        field = metric["field"]
+        alias = metric["alias"]
+        if func not in _ALLOWED_FUNCS:
+            raise ValueError(f"Unsupported aggregate function: '{func}'")
+        if func == "COUNT_DISTINCT":
+            if field == "*":
+                expr = "COUNT(DISTINCT *)"
+            else:
+                field_expr, _ = _resolve_field_reference(
+                    field, primary, permitted_fields, join_field_permissions
+                )
+                expr = f"COUNT(DISTINCT {field_expr})"
+        elif func == "COUNT" and field == "*":
+            expr = "COUNT(*)"
+        else:
+            field_expr, _ = _resolve_field_reference(
+                field, primary, permitted_fields, join_field_permissions
+            )
+            expr = f"{func}({field_expr})"
+        select_parts.append(f"{expr} AS `{alias}`")
+        metric_aliases.append(alias)
+
+    # The INNER JOIN on _ranked_primary filters the main query to only top items
+    # and provides _rank_val for ordering. The main LIMIT is generous (top-N items
+    # can each have multiple secondary dimension values).
+    main_limit = min(limit * 10, 500)
+
+    main_sql = (
+        f"SELECT {', '.join(select_parts)}\n"
+        f"{from_joins_sql}\n"
+        f"INNER JOIN `_ranked_primary`\n"
+        f"  ON `_ranked_primary`.`{primary_dim_fieldname}` = {primary_dim_expr}"
+        f"{where_sql}\n"
+        f"GROUP BY {', '.join(group_by_parts)}\n"
+        f"ORDER BY `_ranked_primary`.`_rank_val` DESC\n"
+        f"LIMIT %s"
+    )
+    main_params = list(where_params) + [main_limit]
+
+    full_sql = cte + "\n" + main_sql
+    full_params = cte_params + main_params
+
+    return full_sql, full_params
+
+
+def _build_from_joins_sql(primary: str, joins: list[dict]) -> str:
+    """Build the FROM + JOIN SQL fragment for a primary DocType and its joins.
+
+    Standard join: ON child.parent_link_field = primary.name
+    Cross-join (join_on set): ON child.parent_link_field = OtherJoinedTable.field
+      Used when the join key is a field from another joined table rather than the
+      primary DocType's name.  Example:
+        Sales Invoice → Sales Invoice Item (standard)
+        Item Supplier → join_on: "Sales Invoice Item.item_code"
+          generates: ON `tabItem Supplier`.`parent` = `tabSales Invoice Item`.`item_code`
+    """
+    sql = f"FROM `tab{primary}`"
+    for join in joins:
         child_dt = join["child_doctype"]
         parent_link = join["parent_link_field"]
         join_type = join.get("join_type", "LEFT").upper()
         if join_type not in ("INNER", "LEFT"):
             raise ValueError(f"Unsupported join type: '{join_type}'")
+
+        join_on = join.get("join_on")
+        if join_on:
+            # Cross-join: right-hand side is a field from another joined DocType.
+            explicit_dt, field = _split_field_reference(join_on)
+            if explicit_dt:
+                rhs_expr = f"`tab{explicit_dt}`.`{field}`"
+            else:
+                rhs_expr = f"`tab{primary}`.`{field}`"
+        else:
+            rhs_expr = f"`tab{primary}`.`name`"
+
         sql += (
             f"\n{join_type} JOIN `tab{child_dt}` "
-            f"ON `tab{child_dt}`.`{parent_link}` = `tab{primary}`.`name`"
+            f"ON `tab{child_dt}`.`{parent_link}` = {rhs_expr}"
         )
+    return sql
 
-    # WHERE
+
+def _build_where_clause(
+    intent: dict,
+    primary: str,
+    permitted_fields: set,
+    join_field_permissions: dict,
+    user: str,
+) -> tuple[list[str], list]:
+    """
+    Build the WHERE clause parts and params from intent filters, date_range,
+    and the row-scope permission check.
+
+    Returns (where_parts, params) — both can be reused for CTE + main query
+    by duplicating params.
+    """
     where_parts = []
+    params: list = []
 
     for filt in intent.get("filters", []):
         # Handle both 3-element [field, op, value] and 4-element [doctype, field, op, value]
         if len(filt) == 4:
             dt, field, op, value = filt[0], filt[1], filt[2], filt[3]
-            # Build "DocType.field" reference if not already qualified
             fieldname = f"{dt}.{field}" if "." not in field else field
         else:
             fieldname, op, value = filt[0], filt[1], filt[2]
@@ -159,7 +410,6 @@ def compile_analytics_intent(
             where_parts.append(f"{col} {op} ({placeholders})")
             params.extend(values_list)
         elif op.lower() == "between":
-            # Guard: skip if either bound is a date-preset string (LLM mistake)
             _DATE_PRESETS = {
                 "today", "yesterday", "this_week", "this_month",
                 "last_month", "this_year", "last_30_days",
@@ -173,7 +423,7 @@ def compile_analytics_intent(
             where_parts.append(f"{col} {op} %s")
             params.append(value)
 
-    # Date range (Gate 2 check on the date field)
+    # Date range
     date_range = intent.get("date_range")
     if date_range:
         dr_field = date_range["field"]
@@ -208,34 +458,19 @@ def compile_analytics_intent(
             "query_compiler: row-scope permission check failed",
         )
 
-    if where_parts:
-        sql += "\nWHERE " + "\n  AND ".join(where_parts)
-
-    # GROUP BY — only when aggregating (i.e. there are metrics).
-    # If there are only dimensions and no metrics, we want a flat JOIN result
-    # (e.g. list all Sales Invoice Items), so skip GROUP BY to avoid deduplication.
-    if group_by_parts and metric_aliases:
-        sql += "\nGROUP BY " + ", ".join(group_by_parts)
-
-    # ORDER BY (validated — only permitted fields or metric aliases)
-    order_by = intent.get("order_by")
-    if order_by:
-        order_by = _validate_order_by(order_by, permitted_fields, metric_aliases + dimension_aliases)
-    if order_by:
-        sql += f"\nORDER BY {order_by}"
-
-    # LIMIT (hard cap)
-    limit = min(int(intent.get("limit", max_rows)), max_rows)
-    sql += "\nLIMIT %s"
-    params.append(limit)
-
-    return sql, params
+    return where_parts, params
 
 
 def _validate_join(join: dict, primary_doctype: str) -> None:
     """
-    Verify the join spec refers to a valid relationship (child table or Link field).
+    Verify the join spec refers to a valid relationship.
     Raises ValueError if the join cannot be validated.
+
+    Three valid patterns:
+    1. Child table (istable=1): parent_link_field must exist on the child.
+    2. Non-child with join_on: cross-join via another joined table's field —
+       skip Link-field check since the ON clause references a secondary table.
+    3. Non-child without join_on: must be via a declared Link field on the primary.
     """
     child_dt = join["child_doctype"]
     parent_link = join["parent_link_field"]
@@ -249,13 +484,18 @@ def _validate_join(join: dict, primary_doctype: str) -> None:
             )
         return
 
-    # Non-child-table: must be via a declared Link field on primary_doctype
+    if join.get("join_on"):
+        # Cross-join to a non-child-table via another joined table's field.
+        # The ON clause is built from join_on — no Link-field validation needed.
+        return
+
+    # Non-child-table without join_on: must be via a declared Link field on primary_doctype
     primary_meta = frappe.get_meta(primary_doctype)
     link_field = primary_meta.get_field(parent_link)
     if not link_field or link_field.fieldtype != "Link":
         raise ValueError(
             f"'{parent_link}' is not a Link field on '{primary_doctype}'. "
-            "Joins must go through declared Link fields."
+            "Joins must go through declared Link fields or use join_on."
         )
     if link_field.options != child_dt:
         raise ValueError(

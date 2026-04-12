@@ -83,6 +83,68 @@ Examples: "total sales by customer this month", "how many invoices submitted tod
   "limit": 20
 }
 
+### Mode "analytics" with rank_by_primary_dimension
+Use for "top-X and their Y" questions — when the user wants top items/customers/products
+ranked by their TOTAL metric (across all values of a secondary dimension), then wants
+to see which secondary entities (suppliers, sales reps, warehouses, etc.) are associated.
+
+Examples:
+- "top purchased items and their suppliers" → rank items by total purchase amount, show each supplier
+- "top selling SKUs and who sold them" → rank items by total sales, show each sales rep
+- "top customers and their sales reps" → rank customers by total, show reps
+
+Key: grouping by (item, supplier) and ordering by the pair's amount is WRONG — it ranks
+pairs, not items. Use rank_by_primary_dimension=true instead:
+
+{
+  "mode": "analytics",
+  "rank_by_primary_dimension": true,
+  "primary_doctype": "<DocType>",
+  "joins": [...],
+  "dimensions": ["<primary ranking field>", "<secondary detail field>"],
+  "metrics": [{"func": "SUM", "field": "...", "alias": "total_amount"}],
+  "filters": [...],
+  "limit": 20
+}
+
+The backend generates a CTE that ranks the first dimension by the first metric's total,
+then the main query shows all secondary dimension values for only the top-ranked primaries.
+The order_by field is ignored when rank_by_primary_dimension=true — ordering is always by
+the primary dimension's total descending.
+
+### Cross-table joins with join_on
+When the join key comes from ANOTHER joined table (not the primary DocType's name), use
+"join_on" in the join spec. This generates: ON child.parent_link = OtherTable.field.
+
+CRITICAL — "Item Supplier" vs Purchase Invoice for supplier data:
+  "Item Supplier" is the item MASTER's registered supplier list. It is NOT real transaction
+  data. NEVER use it to answer "which suppliers supplied our top selling items".
+  To find ACTUAL suppliers of sold items, join Purchase Invoice data instead:
+
+Example — "top selling items and their actual suppliers":
+  1. Sales Invoice Item: get item_code + sales amount (ranked by sales)
+  2. Purchase Invoice Item: match by item_code (cross-join, parent_link_field="item_code")
+  3. Purchase Invoice: get supplier field (join via Purchase Invoice Item.parent)
+
+{
+  "mode": "analytics",
+  "rank_by_primary_dimension": true,
+  "primary_doctype": "Sales Invoice",
+  "joins": [
+    {"child_doctype": "Sales Invoice Item", "parent_link_field": "parent", "join_type": "LEFT"},
+    {"child_doctype": "Purchase Invoice Item", "parent_link_field": "item_code",
+     "join_on": "Sales Invoice Item.item_code", "join_type": "LEFT"},
+    {"child_doctype": "Purchase Invoice", "parent_link_field": "name",
+     "join_on": "Purchase Invoice Item.parent", "join_type": "LEFT"}
+  ],
+  "dimensions": ["Sales Invoice Item.item_code", "Purchase Invoice.supplier"],
+  "metrics": [{"func": "SUM", "field": "Sales Invoice Item.amount", "alias": "total_sales"}],
+  "filters": [["docstatus", "=", 1]],
+  "limit": 20
+}
+
+CRITICAL: For Sales Invoice line items ALWAYS use "Sales Invoice Item" — NEVER "Packed Item".
+
 ## Rules
 
 1. Use ONLY DocTypes and fields listed in ## Available Schema below.
@@ -165,6 +227,28 @@ including Arabic phrasing like "حركة الاصناف عند كل عميل", p
 override the user's explicit request. \
 If it says record_list/lookup/table/text, do not force \
 aggregation.
+23. For "top X and their Y" questions — where the user wants primary entities \
+(items, customers, suppliers) ranked by their TOTAL metric across ALL values of a \
+secondary dimension, then wants to see which secondary entities are associated — \
+set "rank_by_primary_dimension": true. \
+The first dimension must be the primary ranking entity (e.g. item_code), \
+the second must be the secondary detail (e.g. supplier). \
+NEVER use a plain (item, supplier) GROUP BY with order_by for this pattern — that \
+ranks pairs, not items, and gives wrong results when one item has multiple suppliers.
+24. When the join key comes from another already-joined table (not the primary DocType's \
+name), use join_on. CRITICAL: NEVER use "Item Supplier" to find actual suppliers of sold \
+items — "Item Supplier" is item master data, NOT transaction data. \
+For "top selling items and their ACTUAL suppliers": \
+  primary_doctype="Sales Invoice", \
+  joins=[Sales Invoice Item (parent_link_field="parent"), \
+         Purchase Invoice Item (parent_link_field="item_code", join_on="Sales Invoice Item.item_code"), \
+         Purchase Invoice (parent_link_field="name", join_on="Purchase Invoice Item.parent")], \
+  dimension: "Purchase Invoice.supplier". \
+For "top purchased items and their suppliers": \
+  primary_doctype="Purchase Invoice", \
+  joins=[Purchase Invoice Item (parent_link_field="parent")], \
+  dimension: "supplier" (on the Purchase Invoice itself). \
+NEVER use "Packed Item" for line items — always use "Sales Invoice Item" or "Purchase Invoice Item".
 """
 
 
@@ -177,6 +261,7 @@ def generate_query_intent(
     current_day_name: str | None = None,
     current_year: int | None = None,
     presentation_plan: dict | None = None,
+    join_plan: dict | None = None,
     attempt: int = 0,
     previous_error: str | None = None,
     trace_metadata: dict | None = None,
@@ -212,6 +297,14 @@ def generate_query_intent(
             "## Presentation Plan (Advisory)\n"
             f"{json.dumps(_compact_presentation_plan(presentation_plan), ensure_ascii=True)}"
         )
+    if join_plan and join_plan.get("primary_doctype"):
+        user_parts.append(
+            "## Pre-planned Join Architecture (FOLLOW THIS EXACTLY)\n"
+            f"{json.dumps(join_plan, ensure_ascii=False)}\n"
+            "Use this join plan as the basis for your intent. "
+            "Do NOT change the primary_doctype or joins listed here. "
+            "Fill in dimensions, metrics, filters, and limit to answer the question."
+        )
     user_parts.append(f"## Question\n{question}")
 
     if attempt > 0 and previous_error:
@@ -226,8 +319,14 @@ def generate_query_intent(
         {"role": "user", "content": "\n".join(user_parts)},
     ]
 
+    # Query intent JSON can be complex (multiple joins, dimensions, filters).
+    # Enforce a minimum to avoid truncated responses when the global setting is low.
+    _MIN_QUERY_PLANNER_TOKENS = 1500
+    effective_max_tokens = max(llm_client.max_tokens, _MIN_QUERY_PLANNER_TOKENS)
+
     raw = llm_client.chat_completion(
         messages,
+        max_tokens=effective_max_tokens,
         trace_metadata=trace_metadata,
         trace_tags=trace_tags,
     )

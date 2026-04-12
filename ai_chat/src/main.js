@@ -3,10 +3,10 @@ import App from "./App.vue";
 import "./style.css";
 
 import router from './router';
-import resourceManager from "../../../doppio/libs/resourceManager";
-import call from "../../../doppio/libs/controllers/call";
+import resourceManager from "./lib/doppio/resourceManager";
+import call from "./lib/doppio/controllers/call";
 import { io } from "socket.io-client";
-import Auth from "../../../doppio/libs/controllers/auth";
+import Auth from "./lib/doppio/controllers/auth";
 
 async function initApp() {
 	// Fetch CSRF token from Frappe when Jinja didn't inject it (Vite dev server).

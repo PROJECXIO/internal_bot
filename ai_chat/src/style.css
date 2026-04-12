@@ -26,6 +26,27 @@ body,
   gap: 0.75rem;
 }
 
+.session-sidebar__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.session-sidebar__baseline-link {
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  border-radius: 0.75rem;
+  padding: 0.45rem 0.75rem;
+  font-size: 0.75rem;
+  color: #6366f1;
+  background: #eff6ff;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.session-sidebar__baseline-link:hover {
+  background: #e0e7ff;
+}
+
 .session-sidebar__signout {
   border: 1px solid rgba(203, 213, 225, 1);
   border-radius: 0.75rem;

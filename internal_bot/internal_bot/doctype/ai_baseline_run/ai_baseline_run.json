@@ -1,0 +1,216 @@
+{
+ "actions": [],
+ "autoname": "format:AIBR-{YYYY}-{MM}-{DD}-{#####}",
+ "creation": "2024-01-01 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "status",
+  "fixture_name",
+  "job_id",
+  "run_user",
+  "started_at",
+  "finished_at",
+  "duration_ms",
+  "section_break_counts",
+  "total_queries",
+  "completed_queries",
+  "success_count",
+  "clarification_count",
+  "blocked_count",
+  "greeting_count",
+  "error_count",
+  "status_mismatch_count",
+  "no_row_count",
+  "section_break_perf",
+  "average_retries",
+  "average_timing_ms",
+  "section_break_data",
+  "summary_json",
+  "report_json",
+  "error_detail"
+ ],
+ "fields": [
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "Queued\nRunning\nCompleted\nFailed",
+   "reqd": 1
+  },
+  {
+   "fieldname": "fixture_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Fixture Name",
+   "reqd": 1
+  },
+  {
+   "fieldname": "job_id",
+   "fieldtype": "Data",
+   "label": "Job ID",
+   "read_only": 1
+  },
+  {
+   "fieldname": "run_user",
+   "fieldtype": "Link",
+   "label": "Run User",
+   "options": "User"
+  },
+  {
+   "fieldname": "started_at",
+   "fieldtype": "Datetime",
+   "label": "Started At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "finished_at",
+   "fieldtype": "Datetime",
+   "label": "Finished At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "duration_ms",
+   "fieldtype": "Int",
+   "label": "Duration (ms)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_counts",
+   "fieldtype": "Section Break",
+   "label": "Query Counts"
+  },
+  {
+   "default": "0",
+   "fieldname": "total_queries",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Total Queries",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "completed_queries",
+   "fieldtype": "Int",
+   "label": "Completed Queries",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "success_count",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Success",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "clarification_count",
+   "fieldtype": "Int",
+   "label": "Clarification",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "blocked_count",
+   "fieldtype": "Int",
+   "label": "Blocked",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "greeting_count",
+   "fieldtype": "Int",
+   "label": "Greeting",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "error_count",
+   "fieldtype": "Int",
+   "label": "Errors",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "status_mismatch_count",
+   "fieldtype": "Int",
+   "label": "Status Mismatches",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "no_row_count",
+   "fieldtype": "Int",
+   "label": "No-Row Results",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_perf",
+   "fieldtype": "Section Break",
+   "label": "Performance",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "average_retries",
+   "fieldtype": "Float",
+   "label": "Average Retries",
+   "read_only": 1
+  },
+  {
+   "fieldname": "average_timing_ms",
+   "fieldtype": "Float",
+   "label": "Average Timing (ms)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_data",
+   "fieldtype": "Section Break",
+   "label": "Raw Data",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "summary_json",
+   "fieldtype": "Long Text",
+   "label": "Summary JSON",
+   "read_only": 1
+  },
+  {
+   "fieldname": "report_json",
+   "fieldtype": "Long Text",
+   "label": "Report JSON",
+   "read_only": 1
+  },
+  {
+   "fieldname": "error_detail",
+   "fieldtype": "Long Text",
+   "label": "Error Detail",
+   "read_only": 1
+  }
+ ],
+ "links": [],
+ "modified": "2024-01-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Internal Bot",
+ "name": "AI Baseline Run",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 0
+}

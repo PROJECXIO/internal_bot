@@ -19,6 +19,8 @@ Graph topology:
                        │                                                            └─ [ask]   → result_formatter
                        └─ [schema_found]        → presentation_planner
                                                        ↓
+                                                query_architect  ← decides which DocTypes/joins needed,
+                                                       ↓           enriches schema_context
                                                 query_planner
                                                        ↓ (conditional, self-loop on retry)
                                                        ├─ [success]  → visualization_planner
@@ -45,6 +47,7 @@ from internal_bot.bot.nodes import (
     intent_resolver,
     memory_loader,
     presentation_planner,
+    query_architect,
     query_planner,
     result_formatter,
     schema_discovery,
@@ -140,6 +143,7 @@ def _build_graph():
     g.add_node("intent_resolver", intent_resolver.run)
     g.add_node("clarification_planner", clarification_planner.run)
     g.add_node("presentation_planner", presentation_planner.run)
+    g.add_node("query_architect", query_architect.run)
     g.add_node("query_planner", query_planner.run)
     g.add_node("visualization_planner", visualization_planner.run)
     g.add_node("answer_composer", answer_composer.run)
@@ -194,7 +198,8 @@ def _build_graph():
         },
     )
 
-    g.add_edge("presentation_planner", "query_planner")
+    g.add_edge("presentation_planner", "query_architect")
+    g.add_edge("query_architect", "query_planner")
 
     # query_planner → branch on success / retry (self-loop) / give_up
     g.add_conditional_edges(

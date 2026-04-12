@@ -1,0 +1,53 @@
+{
+  "average_retries": 0.36,
+  "average_timing_ms": 12903.08,
+  "blocked_count": 2,
+  "clarification_count": 2,
+  "error_count": 2,
+  "greeting_count": 1,
+  "queries_with_no_rows": [
+    "Q007",
+    "Q011",
+    "Q020",
+    "Q023"
+  ],
+  "status_counts": {
+    "blocked": 2,
+    "clarification_needed": 2,
+    "error": 2,
+    "greeting": 1,
+    "success": 18
+  },
+  "status_mismatches": [
+    {
+      "actual_status": "error",
+      "category": "child_table",
+      "expected_status": "success",
+      "id": "Q012"
+    },
+    {
+      "actual_status": "error",
+      "category": "child_table",
+      "expected_status": "success",
+      "id": "Q014"
+    },
+    {
+      "actual_status": "success",
+      "category": "arabic",
+      "expected_status": "clarification_needed",
+      "id": "Q018"
+    }
+  ],
+  "success_count": 18,
+  "top_failing_categories": [
+    {
+      "category": "child_table",
+      "count": 2
+    },
+    {
+      "category": "arabic",
+      "count": 1
+    }
+  ],
+  "total_queries": 25
+}

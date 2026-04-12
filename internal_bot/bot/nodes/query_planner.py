@@ -123,6 +123,7 @@ def run(state: GraphState) -> dict:
             current_day_name=state.get("current_day_name"),
             current_year=state.get("current_year"),
             presentation_plan=state.get("presentation_plan"),
+            join_plan=state.get("join_plan"),
             llm_client=llm_client,
             attempt=attempt,
             previous_error=previous_error,

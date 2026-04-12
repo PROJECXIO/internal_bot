@@ -372,6 +372,10 @@ def _state_result(
 		"wall_time_ms": round((time.monotonic() - started) * 1000, 2),
 		"error_detail": error_detail,
 		"node_trace": state.get("node_trace") or debug.get("node_trace") or [],
+		"input_tokens": int(state.get("input_tokens") or 0),
+		"output_tokens": int(state.get("output_tokens") or 0),
+		"llm_model": state.get("llm_model") or "",
+		"llm_provider": state.get("llm_provider") or "",
 		"response": _json_safe(_response_without_debug(response)),
 		"debug": _json_safe(debug),
 	}
@@ -413,6 +417,10 @@ def _exception_result(
 		"wall_time_ms": round((time.monotonic() - started) * 1000, 2),
 		"error_detail": str(exc),
 		"node_trace": state.get("node_trace") or [],
+		"input_tokens": int(state.get("input_tokens") or 0),
+		"output_tokens": int(state.get("output_tokens") or 0),
+		"llm_model": state.get("llm_model") or "",
+		"llm_provider": state.get("llm_provider") or "",
 		"response": {},
 		"debug": {},
 	}
@@ -446,6 +454,10 @@ def _error_result(query: dict, error_detail: str, started: float) -> dict:
 		"wall_time_ms": round((time.monotonic() - started) * 1000, 2),
 		"error_detail": error_detail,
 		"node_trace": [],
+		"input_tokens": 0,
+		"output_tokens": 0,
+		"llm_model": "",
+		"llm_provider": "",
 		"response": {},
 		"debug": {},
 	}
@@ -512,6 +524,15 @@ def _build_summary(results: list[dict]) -> dict:
 		if result.get("status") in {"error", "exception"} or not result.get("status_matches_expected")
 	]
 	failing_categories = Counter(result.get("category") or "unknown" for result in failing)
+
+	input_token_values = [int(result.get("input_tokens") or 0) for result in visible_results]
+	output_token_values = [int(result.get("output_tokens") or 0) for result in visible_results]
+	total_input_tokens = sum(input_token_values)
+	total_output_tokens = sum(output_token_values)
+	n = len(visible_results) or 1
+	llm_model = next((r.get("llm_model") for r in visible_results if r.get("llm_model")), "")
+	llm_provider = next((r.get("llm_provider") for r in visible_results if r.get("llm_provider")), "")
+
 	return {
 		"total_queries": len(visible_results),
 		"success_count": status_counts.get("success", 0),
@@ -521,6 +542,12 @@ def _build_summary(results: list[dict]) -> dict:
 		"error_count": status_counts.get("error", 0) + status_counts.get("exception", 0),
 		"average_retries": round(sum(retry_values) / len(retry_values), 2) if retry_values else 0.0,
 		"average_timing_ms": round(sum(timing_values) / len(timing_values), 2) if timing_values else None,
+		"total_input_tokens": total_input_tokens,
+		"total_output_tokens": total_output_tokens,
+		"average_input_tokens": round(total_input_tokens / n, 1),
+		"average_output_tokens": round(total_output_tokens / n, 1),
+		"llm_model": llm_model,
+		"llm_provider": llm_provider,
 		"queries_with_no_rows": no_row_ids,
 		"status_counts": dict(sorted(status_counts.items())),
 		"status_mismatches": [

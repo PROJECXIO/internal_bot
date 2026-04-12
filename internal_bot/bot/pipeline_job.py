@@ -18,7 +18,7 @@ from internal_bot.bot import progress
 from internal_bot.bot import trace
 from internal_bot.bot.graph import get_graph
 from internal_bot.bot.services.language import get_user_profile_language
-from internal_bot.bot.services.llm_client import get_llm_client
+from internal_bot.bot.services.llm_client import get_llm_client, LLMBillingError
 
 # Load env vars (LangSmith etc.) — same as chat.py
 _ENV_FILE = Path(__file__).parents[2] / ".env"
@@ -133,6 +133,19 @@ def run_pipeline_job(
         _store_result(pipeline_job_id, {"status": "complete", "response": response})
         progress.emit_complete(final_state, response)
         trace.request_complete(final_state, response)
+        trace.flush_langsmith()
+
+    except LLMBillingError as exc:
+        frappe.log_error(message=str(exc), title="Internal Bot: LLM billing error")
+        error_response = {
+            "status": "error",
+            "reason": str(exc),
+            "meta": {"confidence": 0.0},
+            "session_id": session_name,
+        }
+        _store_result(pipeline_job_id, {"status": "error", "response": error_response})
+        progress.emit_error(initial_state, user=user)
+        trace.request_error(initial_state, str(exc))
         trace.flush_langsmith()
 
     except Exception as exc:

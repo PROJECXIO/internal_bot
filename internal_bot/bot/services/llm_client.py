@@ -12,6 +12,11 @@ import os
 
 import frappe
 
+
+class LLMBillingError(Exception):
+    """Raised when the provider rejects the request due to insufficient credits (HTTP 402)."""
+    pass
+
 _EMBEDDING_MODELS: dict[str, str | None] = {
 	"OpenAI": "text-embedding-3-small",
 	"Azure OpenAI": "text-embedding-3-small",
@@ -76,14 +81,18 @@ class LLMClient:
 				if v
 			}
 
-		response = self._client.chat.completions.create(
-			model=self.model,
-			messages=messages,
-			temperature=temp,
-			max_tokens=tokens,
-			timeout=self.request_timeout,
-			**request_kwargs,
-		)
+		try:
+			response = self._client.chat.completions.create(
+				model=self.model,
+				messages=messages,
+				temperature=temp,
+				max_tokens=tokens,
+				timeout=self.request_timeout,
+				**request_kwargs,
+			)
+		except Exception as exc:
+			_raise_if_billing_error(exc)
+			raise
 
 		choice = response.choices[0]
 		content = choice.message.content or ""
@@ -199,6 +208,35 @@ def get_llm_client() -> LLMClient:
 		temperature=settings.temperature or 0.0,
 		request_timeout=settings.request_timeout or 30,
 	)
+
+
+def _raise_if_billing_error(exc: Exception) -> None:
+	"""
+	Re-raise exc as LLMBillingError if it looks like an HTTP 402 / insufficient-credits
+	response from the provider.  Covers openai.APIStatusError and plain exceptions whose
+	string representation mentions the 402 code or 'insufficient credits'.
+	"""
+	# openai SDK >= 1.x raises openai.APIStatusError for non-2xx responses
+	status_code = getattr(exc, "status_code", None)
+	if status_code == 402:
+		# Try to extract the provider's own message from the response body
+		body = getattr(exc, "body", None) or {}
+		provider_msg = ""
+		if isinstance(body, dict):
+			provider_msg = (body.get("error") or {}).get("message", "") if isinstance(body.get("error"), dict) else ""
+		msg = provider_msg or str(exc)
+		raise LLMBillingError(
+			f"The AI provider rejected the request due to insufficient credits. "
+			f"Please top up your account and try again. (Provider: {msg})"
+		) from exc
+
+	# Fallback: some proxies wrap the 402 in a plain exception whose text mentions it
+	exc_str = str(exc).lower()
+	if "402" in exc_str and ("insufficient" in exc_str or "credit" in exc_str):
+		raise LLMBillingError(
+			f"The AI provider rejected the request due to insufficient credits. "
+			f"Please top up your account and try again. (Detail: {exc})"
+		) from exc
 
 
 def _langsmith_tracing_enabled() -> bool:

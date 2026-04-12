@@ -1,24 +1,74 @@
 {
-  "average_retries": 0.36,
-  "average_timing_ms": 12903.08,
-  "blocked_count": 2,
-  "clarification_count": 2,
-  "error_count": 2,
-  "greeting_count": 1,
+  "average_input_tokens": 0.0,
+  "average_output_tokens": 0.0,
+  "average_retries": 2.48,
+  "average_timing_ms": 1320.95,
+  "blocked_count": 3,
+  "clarification_count": 5,
+  "error_count": 52,
+  "greeting_count": 0,
+  "llm_model": "qwen/qwen-2.5-72b-instruct",
+  "llm_provider": "OpenRouter",
   "queries_with_no_rows": [
-    "Q007",
-    "Q011",
-    "Q020",
-    "Q023"
+    "Q027",
+    "Q029",
+    "Q052"
   ],
   "status_counts": {
-    "blocked": 2,
-    "clarification_needed": 2,
-    "error": 2,
-    "greeting": 1,
-    "success": 18
+    "blocked": 3,
+    "clarification_needed": 5,
+    "error": 52,
+    "success": 3
   },
   "status_mismatches": [
+    {
+      "actual_status": "clarification_needed",
+      "category": "greeting",
+      "expected_status": "greeting",
+      "id": "Q001"
+    },
+    {
+      "actual_status": "error",
+      "category": "clarification_needed",
+      "expected_status": "clarification_needed",
+      "id": "Q004"
+    },
+    {
+      "actual_status": "error",
+      "category": "simple_list_query",
+      "expected_status": "success",
+      "id": "Q006"
+    },
+    {
+      "actual_status": "error",
+      "category": "simple_list_query",
+      "expected_status": "success",
+      "id": "Q007"
+    },
+    {
+      "actual_status": "error",
+      "category": "aggregate",
+      "expected_status": "success",
+      "id": "Q008"
+    },
+    {
+      "actual_status": "error",
+      "category": "aggregate",
+      "expected_status": "success",
+      "id": "Q009"
+    },
+    {
+      "actual_status": "error",
+      "category": "breakdown",
+      "expected_status": "success",
+      "id": "Q010"
+    },
+    {
+      "actual_status": "error",
+      "category": "breakdown",
+      "expected_status": "success",
+      "id": "Q011"
+    },
     {
       "actual_status": "error",
       "category": "child_table",
@@ -29,25 +79,347 @@
       "actual_status": "error",
       "category": "child_table",
       "expected_status": "success",
+      "id": "Q013"
+    },
+    {
+      "actual_status": "error",
+      "category": "child_table",
+      "expected_status": "success",
       "id": "Q014"
     },
     {
-      "actual_status": "success",
+      "actual_status": "error",
+      "category": "arabic",
+      "expected_status": "success",
+      "id": "Q015"
+    },
+    {
+      "actual_status": "error",
+      "category": "arabic",
+      "expected_status": "success",
+      "id": "Q016"
+    },
+    {
+      "actual_status": "error",
+      "category": "arabic",
+      "expected_status": "success",
+      "id": "Q017"
+    },
+    {
+      "actual_status": "error",
       "category": "arabic",
       "expected_status": "clarification_needed",
       "id": "Q018"
+    },
+    {
+      "actual_status": "error",
+      "category": "breakdown",
+      "expected_status": "success",
+      "id": "Q019"
+    },
+    {
+      "actual_status": "error",
+      "category": "follow_up",
+      "expected_status": "success",
+      "id": "Q020"
+    },
+    {
+      "actual_status": "error",
+      "category": "follow_up",
+      "expected_status": "success",
+      "id": "Q021"
+    },
+    {
+      "actual_status": "error",
+      "category": "custom_business",
+      "expected_status": "success",
+      "id": "Q022"
+    },
+    {
+      "actual_status": "error",
+      "category": "edge_no_result",
+      "expected_status": "success",
+      "id": "Q023"
+    },
+    {
+      "actual_status": "error",
+      "category": "custom_business",
+      "expected_status": "success",
+      "id": "Q024"
+    },
+    {
+      "actual_status": "error",
+      "category": "custom_business",
+      "expected_status": "success",
+      "id": "Q025"
+    },
+    {
+      "actual_status": "error",
+      "category": "payment",
+      "expected_status": "success",
+      "id": "Q026"
+    },
+    {
+      "actual_status": "error",
+      "category": "purchase",
+      "expected_status": "success",
+      "id": "Q028"
+    },
+    {
+      "actual_status": "error",
+      "category": "purchase",
+      "expected_status": "success",
+      "id": "Q030"
+    },
+    {
+      "actual_status": "error",
+      "category": "purchase",
+      "expected_status": "success",
+      "id": "Q031"
+    },
+    {
+      "actual_status": "error",
+      "category": "purchase",
+      "expected_status": "success",
+      "id": "Q032"
+    },
+    {
+      "actual_status": "error",
+      "category": "supplier",
+      "expected_status": "success",
+      "id": "Q033"
+    },
+    {
+      "actual_status": "error",
+      "category": "supplier",
+      "expected_status": "success",
+      "id": "Q034"
+    },
+    {
+      "actual_status": "error",
+      "category": "inventory",
+      "expected_status": "success",
+      "id": "Q035"
+    },
+    {
+      "actual_status": "error",
+      "category": "inventory",
+      "expected_status": "success",
+      "id": "Q036"
+    },
+    {
+      "actual_status": "error",
+      "category": "inventory",
+      "expected_status": "success",
+      "id": "Q037"
+    },
+    {
+      "actual_status": "error",
+      "category": "accounting",
+      "expected_status": "success",
+      "id": "Q038"
+    },
+    {
+      "actual_status": "error",
+      "category": "accounting",
+      "expected_status": "success",
+      "id": "Q039"
+    },
+    {
+      "actual_status": "error",
+      "category": "accounting",
+      "expected_status": "success",
+      "id": "Q040"
+    },
+    {
+      "actual_status": "error",
+      "category": "blocked",
+      "expected_status": "blocked",
+      "id": "Q041"
+    },
+    {
+      "actual_status": "error",
+      "category": "arabic_purchase",
+      "expected_status": "success",
+      "id": "Q046"
+    },
+    {
+      "actual_status": "error",
+      "category": "arabic_purchase",
+      "expected_status": "success",
+      "id": "Q047"
+    },
+    {
+      "actual_status": "error",
+      "category": "arabic_purchase",
+      "expected_status": "success",
+      "id": "Q048"
+    },
+    {
+      "actual_status": "error",
+      "category": "date_range",
+      "expected_status": "success",
+      "id": "Q049"
+    },
+    {
+      "actual_status": "error",
+      "category": "date_range",
+      "expected_status": "success",
+      "id": "Q050"
+    },
+    {
+      "actual_status": "error",
+      "category": "date_range",
+      "expected_status": "success",
+      "id": "Q051"
+    },
+    {
+      "actual_status": "error",
+      "category": "edge_adversarial",
+      "expected_status": "blocked",
+      "id": "Q053"
+    },
+    {
+      "actual_status": "error",
+      "category": "edge_adversarial",
+      "expected_status": "success",
+      "id": "Q054"
+    },
+    {
+      "actual_status": "error",
+      "category": "edge_no_result",
+      "expected_status": "success",
+      "id": "Q055"
+    },
+    {
+      "actual_status": "error",
+      "category": "breakdown",
+      "expected_status": "success",
+      "id": "Q056"
+    },
+    {
+      "actual_status": "error",
+      "category": "follow_up",
+      "expected_status": "success",
+      "id": "Q057"
+    },
+    {
+      "actual_status": "error",
+      "category": "follow_up",
+      "expected_status": "success",
+      "id": "Q058"
+    },
+    {
+      "actual_status": "error",
+      "category": "follow_up",
+      "expected_status": "success",
+      "id": "Q059"
+    },
+    {
+      "actual_status": "error",
+      "category": "breakdown",
+      "expected_status": "success",
+      "id": "Q060"
+    },
+    {
+      "actual_status": "error",
+      "category": "follow_up",
+      "expected_status": "success",
+      "id": "Q061"
+    },
+    {
+      "actual_status": "error",
+      "category": "follow_up",
+      "expected_status": "success",
+      "id": "Q062"
+    },
+    {
+      "actual_status": "error",
+      "category": "follow_up",
+      "expected_status": "success",
+      "id": "Q063"
     }
   ],
-  "success_count": 18,
+  "success_count": 3,
   "top_failing_categories": [
     {
-      "category": "child_table",
-      "count": 2
+      "category": "follow_up",
+      "count": 8
+    },
+    {
+      "category": "breakdown",
+      "count": 5
     },
     {
       "category": "arabic",
+      "count": 4
+    },
+    {
+      "category": "purchase",
+      "count": 4
+    },
+    {
+      "category": "child_table",
+      "count": 3
+    },
+    {
+      "category": "custom_business",
+      "count": 3
+    },
+    {
+      "category": "inventory",
+      "count": 3
+    },
+    {
+      "category": "accounting",
+      "count": 3
+    },
+    {
+      "category": "arabic_purchase",
+      "count": 3
+    },
+    {
+      "category": "date_range",
+      "count": 3
+    },
+    {
+      "category": "simple_list_query",
+      "count": 2
+    },
+    {
+      "category": "aggregate",
+      "count": 2
+    },
+    {
+      "category": "edge_no_result",
+      "count": 2
+    },
+    {
+      "category": "supplier",
+      "count": 2
+    },
+    {
+      "category": "edge_adversarial",
+      "count": 2
+    },
+    {
+      "category": "greeting",
+      "count": 1
+    },
+    {
+      "category": "clarification_needed",
+      "count": 1
+    },
+    {
+      "category": "payment",
+      "count": 1
+    },
+    {
+      "category": "blocked",
       "count": 1
     }
   ],
-  "total_queries": 25
+  "total_input_tokens": 0,
+  "total_output_tokens": 0,
+  "total_queries": 63
 }

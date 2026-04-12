@@ -24,7 +24,7 @@ from frappe import _
 from internal_bot.bot.graph import get_graph
 from internal_bot.bot.services.formatter import normalize_cached_response
 from internal_bot.bot.services.language import get_user_profile_language
-from internal_bot.bot.services.llm_client import get_llm_client
+from internal_bot.bot.services.llm_client import get_llm_client, LLMBillingError
 from internal_bot.bot import trace
 
 # Load LangSmith (and other) env vars from the app-level .env file.
@@ -123,6 +123,16 @@ def ask(message: str, session_id: str = None, debug: bool = False):
 		trace.request_complete(final_state, response)
 		trace.flush_langsmith()
 		return response
+	except LLMBillingError as exc:
+		frappe.log_error(message=str(exc), title="Internal Bot: LLM billing error")
+		trace.request_error(initial_state, str(exc))
+		trace.flush_langsmith()
+		return {
+			"status": "error",
+			"reason": str(exc),
+			"meta": {"confidence": 0.0},
+			"session_id": session_name,
+		}
 	except Exception as exc:
 		frappe.log_error(message=frappe.get_traceback(), title="Internal Bot: graph invoke failed")
 		trace.request_error(initial_state, str(exc))

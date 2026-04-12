@@ -25,6 +25,10 @@
   "section_break_perf",
   "average_retries",
   "average_timing_ms",
+  "total_input_tokens",
+  "total_output_tokens",
+  "average_input_tokens",
+  "average_output_tokens",
   "section_break_data",
   "summary_json",
   "report_json",
@@ -162,6 +166,32 @@
    "fieldname": "average_timing_ms",
    "fieldtype": "Float",
    "label": "Average Timing (ms)",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "total_input_tokens",
+   "fieldtype": "Int",
+   "label": "Total Input Tokens",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "total_output_tokens",
+   "fieldtype": "Int",
+   "label": "Total Output Tokens",
+   "read_only": 1
+  },
+  {
+   "fieldname": "average_input_tokens",
+   "fieldtype": "Float",
+   "label": "Avg Input Tokens",
+   "read_only": 1
+  },
+  {
+   "fieldname": "average_output_tokens",
+   "fieldtype": "Float",
+   "label": "Avg Output Tokens",
    "read_only": 1
   },
   {
